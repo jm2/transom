@@ -10,8 +10,8 @@ use gtk::subclass::prelude::*;
 use gtk::{gdk, glib, graphene};
 use transom_view_core::config::SessionConfig;
 use transom_view_core::engine::{
-    AuthRequest, CertPrompt, EngineCommand, EngineError, EngineEvent, EngineHandle, InputEvent,
-    MouseButton, PointerEvent, RdpEngine, SharedFrame,
+    AuthRequest, CertPrompt, EngineCommand, EngineError, EngineEvent, EngineHandle, Finished,
+    InputEvent, MouseButton, PointerEvent, RdpEngine, SharedFrame,
 };
 use transom_view_core::geometry::{
     self, DesktopRequest, FitMode, LayoutTracker, LogicalSize, Point, ScaleMode, Size, Viewport,
@@ -178,11 +178,15 @@ mod imp {
             snapshot.translate(&graphene::Point::new(g.snap.0 as f32, g.snap.1 as f32));
             snapshot.scale((1.0 / g.scale) as f32, (1.0 / g.scale) as f32);
             for (r, tex) in inner.tiles.iter() {
-                let x = vp.offset_x + r.x as f64 * vp.ratio;
-                let y = vp.offset_y + r.y as f64 * vp.ratio;
-                let w = r.width as f64 * vp.ratio;
-                let h = r.height as f64 * vp.ratio;
-                let rect = graphene::Rect::new(x as f32, y as f32, w as f32, h as f32);
+                // Round both edges to whole device pixels: neighbouring tiles then
+                // share exact edges, so nothing is antialiased into a seam. (At
+                // ratio 1 these are already integers.)
+                let x0 = (vp.offset_x + r.x as f64 * vp.ratio).round();
+                let y0 = (vp.offset_y + r.y as f64 * vp.ratio).round();
+                let x1 = (vp.offset_x + (r.x + r.width) as f64 * vp.ratio).round();
+                let y1 = (vp.offset_y + (r.y + r.height) as f64 * vp.ratio).round();
+                let rect =
+                    graphene::Rect::new(x0 as f32, y0 as f32, (x1 - x0) as f32, (y1 - y0) as f32);
                 if exact {
                     // 1 texel = 1 device pixel on the device grid: a plain texture
                     // node is sampled 1:1. (A texture-scale node may be drawn via a
@@ -783,6 +787,22 @@ impl TransomView {
         imp.reset_session();
         self.set_cursor(None);
         self.queue_draw();
+    }
+
+    /// Disconnect without blocking. Returns a [`Finished`] that becomes set when the
+    /// backend has fully shut down; wait on it before the process exits.
+    pub fn close(&self) -> Option<Finished> {
+        let imp = self.imp();
+        imp.release_all();
+        let handle = {
+            let mut inner = imp.inner.borrow_mut();
+            inner.session += 1;
+            inner.handle.take()
+        };
+        imp.reset_session();
+        self.set_cursor(None);
+        self.queue_draw();
+        handle.map(|h| h.finished())
     }
 
     /// Disconnect and wait up to `timeout` for the backend to shut down cleanly.

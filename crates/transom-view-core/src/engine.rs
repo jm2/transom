@@ -376,6 +376,11 @@ impl EngineHandle {
         self.finished.is_set()
     }
 
+    /// A handle to wait on the engine thread's exit after this handle is dropped.
+    pub fn finished(&self) -> Finished {
+        self.finished.clone()
+    }
+
     /// Queue a command. Returns false if the engine has already stopped.
     pub fn send(&self, cmd: EngineCommand) -> bool {
         let disconnect = matches!(cmd, EngineCommand::Disconnect);
