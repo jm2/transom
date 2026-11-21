@@ -10,8 +10,8 @@ use gtk::subclass::prelude::*;
 use gtk::{gdk, glib, graphene};
 use transom_view_core::config::SessionConfig;
 use transom_view_core::engine::{
-    AuthRequest, CertPrompt, EngineCommand, EngineError, EngineEvent, EngineHandle, Finished,
-    InputEvent, MouseButton, PointerEvent, RdpEngine, Rect, SharedFrame,
+    AuthRequest, CertDecision, CertPrompt, Credentials, EngineCommand, EngineError, EngineEvent,
+    EngineHandle, Finished, InputEvent, MouseButton, PointerEvent, RdpEngine, Rect, SharedFrame,
 };
 use transom_view_core::geometry::{
     self, DesktopRequest, FitMode, LayoutTracker, LogicalSize, Point, ScaleMode, Size, Viewport,
@@ -19,6 +19,7 @@ use transom_view_core::geometry::{
 };
 use transom_view_core::keymap::{self, Scancode};
 use transom_view_core::monitors::RemoteMonitor;
+use transom_view_core::secrecy::SecretString;
 
 use crate::tiles::TileCache;
 
@@ -62,6 +63,10 @@ mod imp {
         pub(super) leader: glib::WeakRef<super::TransomView>,
         /// For a leader: views showing other regions of the same session.
         pub(super) followers: RefCell<Vec<glib::WeakRef<super::TransomView>>>,
+        /// Prompts waiting for `answer_certificate` / `answer_credentials` (when no
+        /// Rust handler is set; used by the GObject signals / C API).
+        pub(super) pending_cert: RefCell<Option<CertPrompt>>,
+        pub(super) pending_auth: RefCell<Option<AuthRequest>>,
     }
 
     #[derive(Default)]
@@ -121,6 +126,23 @@ mod imp {
                         .build(),
                     Signal::builder("desktop-resized")
                         .param_types([u32::static_type(), u32::static_type()])
+                        .build(),
+                    // (host, port, subject, issuer, sha256, previous sha256 or "").
+                    // Answer with answer_certificate(); unanswered = rejected.
+                    Signal::builder("certificate-prompt")
+                        .param_types([
+                            String::static_type(),
+                            u32::static_type(),
+                            String::static_type(),
+                            String::static_type(),
+                            String::static_type(),
+                            String::static_type(),
+                        ])
+                        .build(),
+                    // (suggested username or "", domain or ""). Answer with
+                    // answer_credentials() or cancel_credentials().
+                    Signal::builder("credentials-required")
+                        .param_types([String::static_type(), String::static_type()])
                         .build(),
                 ]
             })
@@ -442,14 +464,34 @@ mod imp {
                 EngineEvent::AuthRequired(req) => {
                     if let Some(h) = self.auth_handler.borrow().as_ref() {
                         h(&obj, req);
+                        return;
                     }
-                    // No handler: dropping `req` cancels.
+                    // No Rust handler: ask through the signal and keep the request
+                    // until answer_credentials()/cancel_credentials().
+                    let u = req.username.clone().unwrap_or_default();
+                    let d = req.domain.clone().unwrap_or_default();
+                    *self.pending_auth.borrow_mut() = Some(req);
+                    obj.emit_by_name::<()>("credentials-required", &[&u, &d]);
                 }
                 EngineEvent::CertificatePrompt(p) => {
                     if let Some(h) = self.cert_handler.borrow().as_ref() {
                         h(&obj, p);
+                        return;
                     }
-                    // No handler: dropping `p` rejects.
+                    let i = &p.info;
+                    let (host, port, subject, issuer, fp, prev) = (
+                        i.host.clone(),
+                        i.port as u32,
+                        i.subject.clone(),
+                        i.issuer.clone(),
+                        i.fingerprint_sha256.clone(),
+                        p.previous_fingerprint.clone().unwrap_or_default(),
+                    );
+                    *self.pending_cert.borrow_mut() = Some(p);
+                    obj.emit_by_name::<()>(
+                        "certificate-prompt",
+                        &[&host, &port, &subject, &issuer, &fp, &prev],
+                    );
                 }
                 EngineEvent::Redirecting { target } => {
                     tracing::info!(%target, "server redirection");
@@ -493,6 +535,8 @@ mod imp {
 
         pub(super) fn reset_session(&self) {
             self.clipboard.stop();
+            self.pending_cert.borrow_mut().take();
+            self.pending_auth.borrow_mut().take();
             let mut inner = self.inner.borrow_mut();
             if let Some(id) = inner.layout_timer.take() {
                 id.remove();
@@ -997,8 +1041,32 @@ impl TransomView {
         self.imp().send(EngineCommand::CtrlAltDel);
     }
 
+    /// Answer the pending `certificate-prompt`.
+    pub fn answer_certificate(&self, decision: CertDecision) {
+        if let Some(p) = self.imp().pending_cert.borrow_mut().take() {
+            let _ = p.reply.send(decision);
+        }
+    }
+
+    /// Answer the pending `credentials-required` prompt.
+    pub fn answer_credentials(&self, username: &str, domain: Option<&str>, password: SecretString) {
+        if let Some(r) = self.imp().pending_auth.borrow_mut().take() {
+            let _ = r.reply.send(Some(Credentials {
+                username: username.to_string(),
+                domain: domain.filter(|d| !d.is_empty()).map(str::to_string),
+                password,
+            }));
+        }
+    }
+
+    /// Cancel the pending `credentials-required` prompt (aborts the connection).
+    pub fn cancel_credentials(&self) {
+        self.imp().pending_auth.borrow_mut().take();
+    }
+
     /// Called when the server needs (new) credentials. Reply on the request, or
-    /// drop it to cancel. Without a handler, requests are cancelled.
+    /// drop it to cancel. Without a handler, the `credentials-required` signal is
+    /// emitted instead (see [`TransomView::answer_credentials`]).
     pub fn set_auth_handler(&self, f: impl Fn(&TransomView, AuthRequest) + 'static) {
         *self.imp().auth_handler.borrow_mut() = Some(Box::new(f));
     }
