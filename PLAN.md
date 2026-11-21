@@ -27,12 +27,22 @@ free on crates.io as of 2026-11-21. Trademark, Flathub app ID and domain checks 
 - First-class interop with **gnome-remote-desktop (GNOME 50+)** and **Windows 10/11 / Server**.
 - A reusable widget library usable from Rust, C, and Vala (GObject Introspection), so GNOME
   Connections / RDW / Field Monitor could adopt it.
-- Linux/GNOME (Wayland) is the critical target. macOS/Windows builds of the *core* are a
-  later bonus; do not compromise the GNOME UX for them.
+- Linux/GNOME (Wayland) is the critical target, but keep the codebase ready for **macOS and
+  Windows 11 builds of the same GTK4/libadwaita app**, the way the sibling projects Tributary
+  and Balun ship. Never compromise the GNOME UX for them, but don't paint them out either. See
+  `docs/decisions/0002-cross-platform.md`. Concretely:
+  - `transom-view-core` and `transom-view-freerdp` contain no Linux-only code (FreeRDP 3 is
+    found with pkg-config on all three OSes: distro, Homebrew, vcpkg/MSYS2).
+  - Platform-specific behavior sits behind small seams with a per-OS module: secret storage
+    (libsecret / Keychain / Credential Manager), keycode→scancode mapping, keyboard-shortcut
+    inhibition, config/data paths (use GLib's user dirs, never hardcode XDG paths), and URI/MIME
+    handler registration.
+  - CI builds and tests `transom-view-core` on Linux, macOS and Windows from the start.
 
 **Non-goals (do not add)**
 - Other protocols (VNC, SPICE, SSH), plugin systems, zero-trust launchers, CLI-tool
-  downloaders, monitoring. Large credential-backend matrices (libsecret only for v1).
+  downloaders, monitoring. Large credential-backend matrices (the OS secret store only:
+  libsecret on Linux, Keychain on macOS, Credential Manager on Windows).
 
 ## 2. Architecture
 
@@ -131,7 +141,8 @@ Let `s = gdk_surface_get_scale(surface)` (fractional, GTK ≥ 4.12; fall back to
   each session detachable to its own window, true fullscreen (with keyboard-shortcut
   inhibition via `gtk::Window` / Wayland keyboard-shortcuts-inhibit), and a reveal-on-hover
   header in fullscreen.
-- Profiles stored as TOML in `$XDG_CONFIG_HOME/transom/`; secrets in **libsecret** only.
+- Profiles stored as TOML in `<user config dir>/transom/` (`$XDG_CONFIG_HOME` on Linux, via
+  `glib::user_config_dir()`); secrets in the OS secret store only (**libsecret** on Linux).
   Import/export `.rdp` files; register as the handler for `application/x-rdp` and `rdp://`.
 - Per-profile: host/port, gateway (RD Gateway, Phase 4), credentials, scale mode, fit mode,
   multimon, clipboard direction, audio, security (NLA/TLS/RDP), cert policy.
@@ -144,16 +155,16 @@ Let `s = gdk_surface_get_scale(surface)` (fractional, GTK ≥ 4.12; fall back to
 Each phase ends with its Definition of Done (DoD) demonstrated and logged in §11.
 
 ### Phase 0 — Spikes and decisions (≤1 week)
-- [ ] Pick the FreeRDP 3 binding strategy: an existing Rust binding (e.g. the one RDW uses)
+- [x] Pick the FreeRDP 3 binding strategy: an existing Rust binding (e.g. the one RDW uses)
       vs. `bindgen` over the system FreeRDP 3. Write up the choice in `docs/decisions/0001-bindings.md`.
 - [ ] Minimal binary: connect to Windows (antec-win) with FreeRDP, dump one frame to PNG.
-- [ ] Confirm GTK version floor (target ≥ 4.16 for memory-texture updates + cursor callback);
+- [x] Confirm GTK version floor (target ≥ 4.16 for memory-texture updates + cursor callback);
       document fallbacks if a distro is older.
-- [ ] Freeze the engine trait v0.
+- [x] Freeze the engine trait v0 (`transom-view-core::engine`).
 - **DoD:** decisions recorded; the spike connects to both Windows and grd.
 
 ### Phase 1 — Widget MVP with correct HiDPI (2–3 weeks)
-- [ ] `transom-view-core::geometry` with property tests (§3 items 1, 2, 5, 6).
+- [x] `transom-view-core::geometry` with property tests (§3 items 1, 2, 5, 6).
 - [ ] FreeRDP backend: connect, NLA, TOFU cert (system-CA validation first; TOFU fallback
       prompt), GFX negotiation, frames, pointer, keyboard (scancode via XKB keycode→scancode),
       mouse, wheel.
@@ -232,16 +243,17 @@ Integration tests against a headless grd in a VM are optional, behind `--feature
 1. App ID and publishing names: proposed `io.github.jm2.Transom`; confirm the GitHub org/repo
    (`jm2/transom`?), reserve the `transom` and `transom-view*` crate names, and do a trademark /
    Flathub / domain check before the first public release.
-2. Licensing: suggested library `MIT OR Apache-2.0` (or LGPL-2.1+ if aiming at GNOME),
-   app `GPL-3.0-or-later`.
+2. ~~Licensing~~ **Decided 2026-11-21:** everything (libraries and app) is
+   `GPL-3.0-or-later` (`COPYING`). FreeRDP (Apache-2.0) is GPLv3-compatible.
 3. Upstream ambitions: if GNOME Circle or adoption by Connections is a goal, decide how
    AI-assisted contributions square with GNOME's policy *before* public release.
 4. Minimum GTK/libadwaita versions (proposed GTK 4.16 / libadwaita 1.6).
-5. Whether cross-platform builds (macOS/Windows) of Transom are in scope at all, or only
-   `transom-view-core` reuse.
+5. ~~Cross-platform scope~~ **Decided 2026-11-21:** keep Transom itself portable to macOS
+   and Windows 11 (same GTK app, like Tributary/Balun). Linux stays the priority; per-OS
+   packaging comes after v0.1. See `docs/decisions/0002-cross-platform.md`.
 
 ## 11. Progress log
 
 | Date | Session | Phase | Summary | Next |
 |---|---|---|---|---|
-| | | | | |
+| 2026-11-21 | 1 | 0 → 1 | Relicensed everything GPL-3.0-or-later. Cross-platform (macOS/Win11, Tributary/Balun-style) adopted as a design constraint (ADR 0002). Workspace + `verify.sh` + cargo-deny + CI (Linux full, macOS/Windows core). ADR 0001: own bindgen over system FreeRDP 3 (≥ 3.10). ADR 0003: GTK 4.16 / adw 1.6 floor (proposed). Core: geometry (§3.1/2/5/6, 24 unit+property tests), engine trait v0, config, cert fingerprints. FreeRDP backend: context, settings, TLS cert callback → `CertificatePrompt`, NLA auth, GDI damage → `SharedFrame`, DesktopResize, Display Control layouts (200 ms rate limit), pointer, keyboard/mouse/wheel input. Spike reaches antec-win: cert prompt OK (fingerprint `FE:ED:C4:52:…`), bad password → `AuthenticationFailed`. | Spike frame PNG with real creds (antec-win + grd). `TransomView` widget. Keycode→scancode tables. TOFU store. |
