@@ -2,10 +2,16 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Audio playback check against the grd test server, silently: a tone plays into a
 # null sink in the remote session; the client (in a container with its own null
-# sink) must reproduce it. Needs scripts/test-servers.sh up.
+# sink) must reproduce it; then the microphone the other way.
+#   scripts/audio-check.sh                # grd (scripts/test-servers.sh up)
+#   TARGET=win11 scripts/audio-check.sh   # or server (scripts/winvm.sh)
 set -euo pipefail
 cd "$(dirname "$0")/.."
-STATE="${TMPDIR:-/var/tmp}/transom-test"
+source scripts/lib/target.sh
+if [[ $T_KIND == windows ]]; then
+    source tests/servers/windows/audio-check.sh
+    exit
+fi
 cargo build -q -p transom-view-freerdp --example spike
 fp=$(podman logs transom-grd 2>&1 | sed -n 's/^TLS fingerprint: //p' | tail -1)
 # 6 s of 440 Hz in the session, starting once the client is connected.

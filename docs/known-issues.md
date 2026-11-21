@@ -40,3 +40,15 @@ be reported upstream and re-checked.
 - Test-environment note: in rootless containers, GTK's sandboxed image loader (glycin
   with bubblewrap) can't start, so the probe reads raw `image/bmp` bytes instead of
   decoding them.
+
+## Windows Server 2025: microphone redirection not opened
+
+Against the Server 2025 test VM, audio playback reaches the client, but the server
+never opens the `AUDIO_INPUT` dynamic channel, so applications in the session cannot
+record (the same client against Windows 11 25H2 records fine: `TARGET=win11
+scripts/audio-check.sh`). In "Remote Desktop for Administration" mode no capture
+endpoint exists at all; with the RD Session Host role installed the endpoint appears
+but `waveInOpen` fails (`MMSYSERR_ERROR`) because the channel is never created.
+Checked: policy and RDP-Tcp `fDisableAudioCapture = 0`, Windows Audio running,
+Server-Media-Foundation installed, fresh session. Not yet compared with mstsc
+against the same server, so it may still be a server-side setting.

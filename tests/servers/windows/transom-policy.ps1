@@ -32,6 +32,10 @@ Set-Policy 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU' NoAutoUp
 # Server: no "Shutdown Event Tracker" dialog after an unclean stop (it covers the screen).
 Set-Policy 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Reliability' ShutdownReasonOn 0
 
+# RDP audio redirection needs the Windows Audio service (disabled by default on Server).
+Set-Service Audiosrv -StartupType Automatic
+Start-Service Audiosrv
+
 # Report what is in effect, so `winvm.sh configure` shows a verifiable result.
 Get-ItemProperty $ts | Select-Object AVC444ModePreferred, AVCHardwareEncodePreferred,
     fDisableAudioCapture, fDisableCdm, fDisableClip, fDisableCameraRedir | Format-List
