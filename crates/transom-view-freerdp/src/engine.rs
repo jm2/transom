@@ -544,6 +544,15 @@ unsafe fn apply_settings(
     set_bool(ffi::FreeRDP_RemoteFxCodec, true)?;
     set_bool(ffi::FreeRDP_SupportDisplayControl, true)?;
     set_bool(ffi::FreeRDP_DynamicResolutionUpdate, true)?;
+    // Audio: rdpsnd (playback) and audin (microphone); FreeRDP picks the platform
+    // backend (PulseAudio/PipeWire on Linux, CoreAudio on macOS, WinMM on Windows).
+    use transom_view_core::config::AudioMode;
+    set_bool(ffi::FreeRDP_AudioPlayback, cfg.audio == AudioMode::Local)?;
+    set_bool(
+        ffi::FreeRDP_RemoteConsoleAudio,
+        cfg.audio == AudioMode::Remote,
+    )?;
+    set_bool(ffi::FreeRDP_AudioCapture, cfg.microphone)?;
     set_bool(
         ffi::FreeRDP_RedirectClipboard,
         cfg.clipboard != transom_view_core::config::ClipboardMode::Off,

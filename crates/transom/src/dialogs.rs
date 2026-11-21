@@ -6,7 +6,7 @@ use std::rc::Rc;
 
 use adw::prelude::*;
 use gtk::glib;
-use transom_view::core::config::{CertPolicy, ClipboardMode, SecurityMode};
+use transom_view::core::config::{AudioMode, CertPolicy, ClipboardMode, SecurityMode};
 use transom_view::core::engine::{CertDecision, CertPrompt};
 use transom_view::core::geometry::{FitMode, ScaleMode};
 use transom_view::core::profile::Profile;
@@ -194,6 +194,11 @@ const CLIPBOARD_CHOICES: &[(&str, ClipboardMode)] = &[
     ("Only from Remote", ClipboardMode::FromRemote),
     ("Off", ClipboardMode::Off),
 ];
+const AUDIO_CHOICES: &[(&str, AudioMode)] = &[
+    ("Play on This Computer", AudioMode::Local),
+    ("Play on Remote Computer", AudioMode::Remote),
+    ("Off", AudioMode::Off),
+];
 const SECURITY_CHOICES: &[(&str, SecurityMode)] = &[
     ("Automatic", SecurityMode::Negotiate),
     ("NLA Only", SecurityMode::Nla),
@@ -267,6 +272,14 @@ pub fn profile_editor(
     let devices = adw::PreferencesGroup::builder().title("Sharing").build();
     let clip = combo("Clipboard", CLIPBOARD_CHOICES, profile.clipboard);
     devices.add(&clip);
+    let audio = combo("Sound", AUDIO_CHOICES, profile.audio);
+    devices.add(&audio);
+    let mic = adw::SwitchRow::builder()
+        .title("Microphone")
+        .subtitle("Let the remote computer use this computer's microphone")
+        .active(profile.microphone)
+        .build();
+    devices.add(&mic);
     page.add(&devices);
 
     let security = adw::PreferencesGroup::builder().title("Security").build();
@@ -340,6 +353,8 @@ pub fn profile_editor(
                 FitMode::Scroll
             };
             p.clipboard = CLIPBOARD_CHOICES[clip.selected() as usize % CLIPBOARD_CHOICES.len()].1;
+            p.audio = AUDIO_CHOICES[audio.selected() as usize % AUDIO_CHOICES.len()].1;
+            p.microphone = mic.is_active();
             p.security = SECURITY_CHOICES[sec.selected() as usize % SECURITY_CHOICES.len()].1;
             p.certificate = if ignore_cert.is_active() {
                 CertPolicy::Ignore

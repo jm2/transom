@@ -226,6 +226,8 @@ fn build(app: &gtk::Application, args: Args, code: Rc<Cell<u8>>) {
         scale_mode: args.scale_mode,
         fit_mode: args.fit,
         clipboard: transom_view::core::config::ClipboardMode::Both,
+        audio: transom_view::core::config::AudioMode::Off,
+        microphone: false,
         // Replaced by the view with a request computed from its size and scale.
         initial: desktop_request(args.scale_mode, Default::default(), 1.0),
     };

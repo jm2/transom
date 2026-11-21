@@ -25,6 +25,11 @@ fi
 
 pipewire & sleep 0.5
 wireplumber & sleep 0.5
+# A null sink as the default output, so session audio has somewhere to go (grd
+# forwards what plays there; tests play a tone into it).
+pipewire-pulse & sleep 0.5
+pactl load-module module-null-sink sink_name=transom_null >/dev/null 2>&1 || true
+pactl set-default-sink transom_null >/dev/null 2>&1 || true
 gnome-shell --headless --no-x11 2>&1 | sed -u "s/^/[shell] /" &
 sleep 4
 

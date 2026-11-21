@@ -4,7 +4,7 @@ FROM registry.fedoraproject.org/fedora:45
 
 RUN dnf install -y --setopt=install_weak_deps=False \
         gnome-shell gnome-remote-desktop mutter \
-        pipewire wireplumber pipewire-pulseaudio \
+        pipewire wireplumber pipewire-pulseaudio pulseaudio-utils \
         mesa-dri-drivers mesa-libEGL \
         dbus-daemon dbus-tools openssl procps-ng \
         adwaita-sans-fonts adwaita-mono-fonts adwaita-icon-theme \

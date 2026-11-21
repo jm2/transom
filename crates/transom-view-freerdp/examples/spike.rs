@@ -4,6 +4,7 @@
 //! ```text
 //! spike HOST[:PORT] USER [--domain D] [--password-file FILE] [--trust SHA256]
 //!       [--size WxH] [--scale S] [--out frame.png] [--settle-ms N]
+//!       [--audio] [--mic] [--stay-ms N]   (audio out / microphone in; stay N ms)
 //! ```
 //!
 //! The password is read from `--password-file` or, if absent, the first line of stdin.
@@ -34,6 +35,9 @@ struct Args {
     scale: f64,
     out: String,
     settle: Duration,
+    audio: bool,
+    mic: bool,
+    stay: Option<Duration>,
 }
 
 fn parse() -> Result<Args, String> {
@@ -55,6 +59,9 @@ fn parse() -> Result<Args, String> {
         scale: 1.0,
         out: "frame.png".into(),
         settle: Duration::from_millis(1500),
+        audio: false,
+        mic: false,
+        stay: None,
     };
     while let Some(flag) = it.next() {
         let mut val = || it.next().ok_or(format!("{flag} needs a value"));
@@ -76,6 +83,11 @@ fn parse() -> Result<Args, String> {
             "--out" => a.out = val()?,
             "--settle-ms" => {
                 a.settle = Duration::from_millis(val()?.parse().map_err(|_| "bad ms")?)
+            }
+            "--audio" => a.audio = true,
+            "--mic" => a.mic = true,
+            "--stay-ms" => {
+                a.stay = Some(Duration::from_millis(val()?.parse().map_err(|_| "bad ms")?))
             }
             other => return Err(format!("unknown flag {other}")),
         }
@@ -156,6 +168,12 @@ fn main() -> ExitCode {
         scale_mode: ScaleMode::MatchLocal,
         fit_mode: FitMode::Fit,
         clipboard: transom_view_core::config::ClipboardMode::Both,
+        audio: if args.audio {
+            transom_view_core::config::AudioMode::Local
+        } else {
+            transom_view_core::config::AudioMode::Off
+        },
+        microphone: args.mic,
         initial,
     };
 
@@ -173,7 +191,8 @@ fn main() -> ExitCode {
         }
     };
 
-    let deadline = Instant::now() + Duration::from_secs(60);
+    let started = Instant::now();
+    let deadline = started + Duration::from_secs(60) + args.stay.unwrap_or_default();
     let mut frame: Option<SharedFrame> = None;
     let mut last_update = Instant::now();
     let mut updates = 0u32;
@@ -247,6 +266,14 @@ fn main() -> ExitCode {
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+        if let (Some(stay), Some(_)) = (args.stay, &frame) {
+            if started.elapsed() >= stay {
+                eprintln!("stayed {} ms", stay.as_millis());
+                code = ExitCode::SUCCESS;
+                break;
+            }
+            continue;
         }
         if let Some(f) = &frame
             && updates > 0

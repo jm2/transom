@@ -53,6 +53,18 @@ impl ClipboardMode {
     }
 }
 
+/// Where remote audio plays (`audiomode` in `.rdp` files).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AudioMode {
+    /// Play on this computer.
+    #[default]
+    Local,
+    /// Leave it playing on the remote computer.
+    Remote,
+    Off,
+}
+
 /// Everything an engine needs to open one session.
 #[derive(Debug, Clone)]
 pub struct SessionConfig {
@@ -67,6 +79,9 @@ pub struct SessionConfig {
     pub scale_mode: ScaleMode,
     pub fit_mode: FitMode,
     pub clipboard: ClipboardMode,
+    pub audio: AudioMode,
+    /// Redirect the local microphone (off by default).
+    pub microphone: bool,
     /// Initial desktop request, computed from the widget size by the caller.
     pub initial: DesktopRequest,
 }

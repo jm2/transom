@@ -17,15 +17,7 @@ use crate::rdpfile::{RdpFile, RdpValue, join_host_port};
 
 pub use crate::config::ClipboardMode;
 
-/// Where remote audio plays (`audiomode` in `.rdp` files).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum AudioMode {
-    #[default]
-    Local,
-    Remote,
-    Off,
-}
+pub use crate::config::AudioMode;
 
 /// RD Gateway settings (used from Phase 4).
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -59,6 +51,7 @@ pub struct Profile {
     pub certificate: CertPolicy,
     pub clipboard: ClipboardMode,
     pub audio: AudioMode,
+    pub microphone: bool,
     pub multimon: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gateway: Option<Gateway>,
@@ -82,6 +75,7 @@ impl Default for Profile {
             certificate: CertPolicy::default(),
             clipboard: ClipboardMode::default(),
             audio: AudioMode::default(),
+            microphone: false,
             multimon: false,
             gateway: None,
             rdp_extra: BTreeMap::new(),
@@ -97,6 +91,7 @@ const MODELLED_KEYS: &[&str] = &[
     "domain",
     "redirectclipboard",
     "audiomode",
+    "audiocapturemode",
     "use multimon",
     "smart sizing",
     "enablecredsspsupport",
@@ -193,6 +188,7 @@ impl Profile {
             Some(2) => AudioMode::Off,
             _ => AudioMode::Local,
         };
+        p.microphone = f.get_bool("audiocapturemode").unwrap_or(false);
         p.multimon = f.get_bool("use multimon").unwrap_or(false);
         p.fit = FitMode::Fit;
         if f.get_bool("enablecredsspsupport") == Some(false) {
@@ -244,6 +240,7 @@ impl Profile {
                 AudioMode::Off => 2,
             },
         );
+        f.set_int("audiocapturemode", self.microphone as i64);
         f.set_int("use multimon", self.multimon as i64);
         f.set_int("dynamic resolution", 1);
         if self.security == SecurityMode::Tls {
@@ -281,6 +278,8 @@ impl Profile {
             scale_mode: self.scale,
             fit_mode: self.fit,
             clipboard: self.clipboard,
+            audio: self.audio,
+            microphone: self.microphone,
             initial: desktop_request(self.scale, LogicalSize::new(1024.0, 768.0), 1.0),
         }
     }
