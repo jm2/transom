@@ -13,6 +13,7 @@
 #   scripts/winvm.sh info    win11|server
 #   scripts/winvm.sh exec    win11|server 'PowerShell…'  # run in the guest (guest agent)
 #   scripts/winvm.sh configure win11|server  # re-apply transom-policy.ps1 (RDP policy)
+#   scripts/winvm.sh fingerprint win11|server  # RDP cert SHA-256, read via the guest agent
 #   scripts/winvm.sh stop    win11|server  # ACPI power-off, then kill after 120 s
 #   scripts/winvm.sh destroy win11|server  # delete the VM and its credentials
 #
@@ -239,6 +240,15 @@ shot)
     ;;
 info) info ;;
 exec) running || { echo "not running" >&2; exit 1; }; guest_ps "${3:?PowerShell command}" ;;
+fingerprint)
+    # Read out of band (guest agent, not the RDP connection), so trusting it is not TOFU.
+    running || { echo "not running" >&2; exit 1; }
+    fp=$(guest_ps '$c = Get-ChildItem "Cert:\LocalMachine\Remote Desktop" | Select-Object -First 1
+[BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($c.RawData)).Replace("-", ":")' | tr -d '\r\n')
+    [[ $fp =~ ^([0-9A-F]{2}:){31}[0-9A-F]{2}$ ]] || { echo "no RDP certificate yet: '$fp'" >&2; exit 1; }
+    echo "$fp" > "$VM/fingerprint"
+    echo "$fp"
+    ;;
 configure)
     running || { echo "not running: '$0 run $name'" >&2; exit 1; }
     guest_ps "$(cat "$SRC/transom-policy.ps1")"
