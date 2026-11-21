@@ -1,0 +1,29 @@
+[package]
+name = "transom-view-freerdp"
+description = "FreeRDP 3 backend for transom-view"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+links = "freerdp3"
+
+[dependencies]
+# libc: malloc'd strings handed to FreeRDP (AuthenticateEx), which frees them.
+libc = "0.2"
+secrecy.workspace = true
+tracing.workspace = true
+transom-view-core.workspace = true
+
+[build-dependencies]
+# bindgen + pkg-config: generate FFI bindings against the system FreeRDP 3 (ADR 0001).
+bindgen = "0.73"
+pkg-config = "0.3"
+
+[dev-dependencies]
+# png: the Phase 0 spike dumps a received frame to disk.
+png = "0.18"
+
+[lints]
+workspace = true
