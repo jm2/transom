@@ -8,7 +8,7 @@ RUN dnf install -y --setopt=install_weak_deps=False \
         mesa-dri-drivers mesa-libEGL \
         dbus-daemon dbus-tools openssl procps-ng \
         adwaita-sans-fonts adwaita-mono-fonts adwaita-icon-theme \
-        gnome-text-editor loupe \
+        gnome-text-editor loupe python3-gobject \
     && dnf clean all
 
 RUN useradd -m -u 1000 rdp
