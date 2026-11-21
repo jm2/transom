@@ -19,5 +19,6 @@
 #include <freerdp/graphics.h>
 #include <freerdp/input.h>
 #include <freerdp/codec/color.h>
+#include <freerdp/codec/h264.h>
 #include <freerdp/settings.h>
 #include <freerdp/version.h>

@@ -533,6 +533,15 @@ unsafe fn apply_settings(
 
     set_bool(ffi::FreeRDP_SoftwareGdi, true)?;
     set_bool(ffi::FreeRDP_SupportGraphicsPipeline, true)?;
+    // GFX codecs: AVC444 → AVC420 → RemoteFX/progressive → planar (PLAN §4). Only
+    // advertise H.264 when a decoder really works (e.g. not a stub OpenH264).
+    let h264 = h264_available();
+    set_bool(ffi::FreeRDP_GfxH264, h264)?;
+    set_bool(ffi::FreeRDP_GfxAVC444, h264)?;
+    set_bool(ffi::FreeRDP_GfxAVC444v2, h264)?;
+    set_bool(ffi::FreeRDP_GfxProgressive, true)?;
+    set_bool(ffi::FreeRDP_GfxProgressiveV2, true)?;
+    set_bool(ffi::FreeRDP_RemoteFxCodec, true)?;
     set_bool(ffi::FreeRDP_SupportDisplayControl, true)?;
     set_bool(ffi::FreeRDP_DynamicResolutionUpdate, true)?;
     set_bool(
@@ -567,6 +576,26 @@ unsafe fn apply_settings(
     let os = ffi::OSMAJORTYPE_UNIX;
     set_u32(ffi::FreeRDP_OsMajorType, os)?;
     Ok(())
+}
+
+/// Whether FreeRDP can create an H.264 decoder here (checked once per process).
+pub fn h264_available() -> bool {
+    static AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *AVAILABLE.get_or_init(|| {
+        // SAFETY: creating and immediately freeing a decoder context has no other
+        // effects; a null return means no working H.264 backend.
+        let ok = unsafe {
+            let ctx = ffi::h264_context_new(FALSE);
+            if ctx.is_null() {
+                false
+            } else {
+                ffi::h264_context_free(ctx);
+                true
+            }
+        };
+        tracing::info!(h264 = ok, "H.264 decoder");
+        ok
+    })
 }
 
 // ---- FreeRDP callbacks -------------------------------------------------------------

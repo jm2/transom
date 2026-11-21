@@ -19,4 +19,4 @@ pub mod ffi {
 mod cliprdr;
 mod engine;
 
-pub use engine::FreeRdpEngine;
+pub use engine::{FreeRdpEngine, h264_available};

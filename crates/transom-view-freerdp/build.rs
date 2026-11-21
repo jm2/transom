@@ -38,6 +38,8 @@ fn main() {
         .allowlist_function("freerdp_.*")
         .allowlist_function("gdi_.*")
         .allowlist_function("graphics_register_pointer")
+        .allowlist_function("h264_context_new")
+        .allowlist_function("h264_context_free")
         .allowlist_function("PubSub_Subscribe.*")
         .allowlist_function("PubSub_Unsubscribe.*")
         .allowlist_function("CreateEventA")
