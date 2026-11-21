@@ -208,6 +208,9 @@ Each phase ends with its Definition of Done (DoD) demonstrated and logged in §1
 
 ### Phase 6 — Performance and polish (ongoing)
 - [ ] Zero-copy dmabuf spike; GraphicsOffload; latency measurements.
+      *Latency tooling done (`scripts/latency-check.sh`): key → full repaint against grd over
+      loopback, median 26–30 ms (input 0.7 ms, server render+encode+transport ~25 ms).
+      dmabuf/offload needs a hardware H.264 stream (Windows VM or GPU-encoding grd).*
 - [x] Accessibility (screen-reader labels on all chrome, high-contrast): AT-SPI audit
       (`scripts/a11y-check.sh`); Ctrl+Alt+Home moves focus out of the session. High contrast
       comes from libadwaita (no custom colours).

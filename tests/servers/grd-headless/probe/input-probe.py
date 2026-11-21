@@ -15,6 +15,8 @@ LOG = open(sys.argv[1] if len(sys.argv) > 1 else "/tmp/input-probe.log", "a", bu
 
 
 def log(**kw):
+    import time
+    kw.setdefault("mono", time.clock_gettime(time.CLOCK_MONOTONIC))
     LOG.write(json.dumps(kw) + "\n")
 
 
@@ -36,9 +38,22 @@ def on_activate(app):
     win = Gtk.ApplicationWindow(application=app, title="input-probe")
     area = Gtk.DrawingArea(hexpand=True, vexpand=True, focusable=True, can_focus=True)
     win.set_child(area)
+    # Latency mode: every key press flips the whole window between two colours, so
+    # a client can time key -> changed frame.
+    flip = {"on": False}
+
+    def draw(_a, cr, w, h):
+        cr.set_source_rgb(*((0.9, 0.2, 0.1) if flip["on"] else (0.1, 0.2, 0.9)))
+        cr.paint()
+
+    area.set_draw_func(draw)
+
+    def on_key_flip(*_):
+        flip["on"] = not flip["on"]
+        area.queue_draw()
 
     keys = Gtk.EventControllerKey()
-    keys.connect("key-pressed", lambda c, kv, kc, st: (log(t="key", down=True, name=Gdk.keyval_name(kv), code=kc), True)[1])
+    keys.connect("key-pressed", lambda c, kv, kc, st: (log(t="key", down=True, name=Gdk.keyval_name(kv), code=kc), on_key_flip(), True)[2])
     keys.connect("key-released", lambda c, kv, kc, st: log(t="key", down=False, name=Gdk.keyval_name(kv), code=kc))
     win.add_controller(keys)
 

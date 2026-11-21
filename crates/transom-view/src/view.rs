@@ -569,12 +569,9 @@ mod imp {
                         w as usize * 4,
                     )
                     .upcast();
-                    // Remote pixels -> logical units.
-                    let k = g.viewport.ratio / g.scale;
-                    let lw = ((w as f64 * k).round() as i32).max(1);
-                    let lh = ((h as f64 * k).round() as i32).max(1);
-                    let hx = ((img.hotspot.0 as f64 * k).round() as i32).clamp(0, lw - 1);
-                    let hy = ((img.hotspot.1 as f64 * k).round() as i32).clamp(0, lh - 1);
+                    // Remote pixels -> logical units (§3.7).
+                    let (lw, lh, hx, hy) =
+                        geometry::cursor_logical(img.size, img.hotspot, g.viewport.ratio, g.scale);
                     let fallback = gdk::Cursor::from_name("default", None);
                     let cursor = gdk::Cursor::from_callback(
                         move |_, _size, _scale, out_w, out_h, out_hx, out_hy| {

@@ -306,6 +306,27 @@ pub fn map_input(lx: f64, ly: f64, s: f64, vp: &Viewport, desktop: Size) -> (Poi
     )
 }
 
+/// §3.7: logical size and hotspot for a remote cursor bitmap of `size` remote
+/// pixels with `hotspot`, shown in a viewport of `ratio` (remote → device pixels)
+/// on a surface of scale `s`. The texture keeps its full resolution; GTK draws it
+/// at `logical × s` device pixels, so the cursor appears at exactly the size it
+/// has on the remote screen. Returns `(width, height, hotspot_x, hotspot_y)`, all
+/// ≥ 0, with the hotspot inside the cursor.
+pub fn cursor_logical(size: Size, hotspot: (u32, u32), ratio: f64, s: f64) -> (i32, i32, i32, i32) {
+    let s = sanitize_scale(s);
+    let ratio = if ratio > 0.0 && ratio.is_finite() {
+        ratio
+    } else {
+        1.0
+    };
+    let k = ratio / s;
+    let w = ((size.width as f64 * k).round() as i32).max(1);
+    let h = ((size.height as f64 * k).round() as i32).max(1);
+    let hx = ((hotspot.0 as f64 * k).round() as i32).clamp(0, w - 1);
+    let hy = ((hotspot.1 as f64 * k).round() as i32).clamp(0, h - 1);
+    (w, h, hx, hy)
+}
+
 /// Turns smooth/hi-res scroll deltas into RDP wheel events of at most ±120 units each,
 /// carrying sub-unit remainders so slow scrolling isn't lost (§3.6).
 ///
@@ -493,6 +514,34 @@ mod tests {
             (0.0, 0.0),
         );
         assert!(!vp.is_pixel_exact());
+    }
+
+    #[test]
+    fn cursor_sizes() {
+        // 200% session, pixel-exact: a 64 px remote cursor is 32 logical = 64 device px.
+        assert_eq!(
+            cursor_logical(Size::new(64, 64), (10, 4), 1.0, 2.0),
+            (32, 32, 5, 2)
+        );
+        // 100%: unchanged.
+        assert_eq!(
+            cursor_logical(Size::new(32, 32), (0, 0), 1.0, 1.0),
+            (32, 32, 0, 0)
+        );
+        // Legacy100 on a 200% screen: the desktop is stretched 2x, so is the cursor.
+        assert_eq!(
+            cursor_logical(Size::new(32, 32), (31, 31), 2.0, 2.0),
+            (32, 32, 31, 31)
+        );
+        // Fit-scaled to half size at 125%: hotspot stays inside.
+        let (w, h, hx, hy) = cursor_logical(Size::new(48, 48), (47, 47), 0.5, 1.25);
+        assert_eq!((w, h), (19, 19));
+        assert!(hx < w && hy < h);
+        // Degenerate input.
+        assert_eq!(
+            cursor_logical(Size::new(1, 1), (5, 5), 0.01, 3.0),
+            (1, 1, 0, 0)
+        );
     }
 
     #[test]
