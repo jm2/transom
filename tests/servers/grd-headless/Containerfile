@@ -1,0 +1,22 @@
+# Throwaway gnome-remote-desktop (headless mode) test server.
+# Software rendering (llvmpipe); no GPU or host session needed.
+FROM registry.fedoraproject.org/fedora:45
+
+RUN dnf install -y --setopt=install_weak_deps=False \
+        gnome-shell gnome-remote-desktop mutter \
+        pipewire wireplumber pipewire-pulseaudio \
+        mesa-dri-drivers mesa-libEGL \
+        dbus-daemon dbus-tools openssl procps-ng \
+        adwaita-sans-fonts adwaita-mono-fonts adwaita-icon-theme \
+        gnome-text-editor loupe \
+    && dnf clean all
+
+RUN useradd -m -u 1000 rdp
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod 755 /usr/local/bin/entrypoint.sh
+
+USER rdp
+ENV XDG_RUNTIME_DIR=/tmp/xdg-runtime \
+    LIBGL_ALWAYS_SOFTWARE=1
+EXPOSE 3389
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
