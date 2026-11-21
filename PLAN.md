@@ -212,13 +212,13 @@ Each phase ends with its Definition of Done (DoD) demonstrated and logged in §1
 
 | Server | Host | Must pass |
 |---|---|---|
-| Windows 11 Pro 24H2+ | antec-win | Phases 1–3 |
+| Windows 11 Pro 24H2+ | throwaway eval VM on antec (needs SVM enabled in BIOS); antec-win only for manual checks | Phases 1–3 |
 | Windows Server 2022/2025 + RDS/Gateway | VM | Phase 4 |
-| gnome-remote-desktop 50+ (all 3 modes) | Fedora VM / spare host | Phases 1–3 |
+| gnome-remote-desktop 50+ (all 3 modes) | headless: `scripts/test-servers.sh` container; remote-login/assistance: Fedora VM | Phases 1–3 |
 | xrdp 0.10.x | VM | Smoke test only |
 | macOS server (`macrdp`, sibling project) | mbp16-m1max | When available |
 
-Local hosts: develop on **antec** (Fedora). Test 100%, 125%, 150%, 200% and mixed-scale dual
+Local hosts: develop on **antec** (Fedora). **No test credentials on primary machines** (antec, antec-win): automated testing uses throwaway containers/VMs with random credentials. Test 100%, 125%, 150%, 200% and mixed-scale dual
 monitors. CI: unit + property tests, clippy `-D warnings`, rustfmt, `cargo deny`, Flatpak build.
 Integration tests against a headless grd in a VM are optional, behind `--features it`.
 
@@ -256,4 +256,4 @@ Integration tests against a headless grd in a VM are optional, behind `--feature
 
 | Date | Session | Phase | Summary | Next |
 |---|---|---|---|---|
-| 2026-11-21 | 1 | 0 → 1 | Relicensed everything GPL-3.0-or-later. Cross-platform (macOS/Win11, Tributary/Balun-style) adopted as a design constraint (ADR 0002). Workspace + `verify.sh` + cargo-deny + CI (Linux full, macOS/Windows core). ADR 0001: own bindgen over system FreeRDP 3 (≥ 3.10). ADR 0003: GTK 4.16 / adw 1.6 floor (proposed). Core: geometry (§3.1/2/5/6, 24 unit+property tests), engine trait v0, config, cert fingerprints. FreeRDP backend: context, settings, TLS cert callback → `CertificatePrompt`, NLA auth, GDI damage → `SharedFrame`, DesktopResize, Display Control layouts (200 ms rate limit), pointer, keyboard/mouse/wheel input. Spike reaches antec-win: cert prompt OK (fingerprint `FE:ED:C4:52:…`), bad password → `AuthenticationFailed`. | Spike frame PNG with real creds (antec-win + grd). `TransomView` widget. Keycode→scancode tables. TOFU store. |
+| 2026-11-21 | 1 | 0 → 1 | Relicensed everything GPL-3.0-or-later. Cross-platform (macOS/Win11, Tributary/Balun-style) adopted as a design constraint (ADR 0002). Workspace + `verify.sh` + cargo-deny + CI (Linux full, macOS/Windows core). ADR 0001: own bindgen over system FreeRDP 3 (≥ 3.10). ADR 0003: GTK 4.16 / adw 1.6 floor (proposed). Core: geometry (§3.1/2/5/6, 24 unit+property tests), engine trait v0, config, cert fingerprints. FreeRDP backend: context, settings, TLS cert callback → `CertificatePrompt`, NLA auth, GDI damage → `SharedFrame`, DesktopResize, Display Control layouts (200 ms rate limit), pointer, keyboard/mouse/wheel input. Spike reaches antec-win: cert prompt OK (fingerprint `FE:ED:C4:52:…`), bad password → `AuthenticationFailed`. Headless grd 51 test container (`scripts/test-servers.sh`): spike frames at 100% (1280×800), 150% (1920×1200, 150/140) and 200% (2560×1600, 200/180), all honoured by grd and rendered at the requested scale. KVM unavailable on antec (SVM disabled in BIOS) → Windows VM pending. | Spike frame PNG with real creds (antec-win + grd). `TransomView` widget. Keycode→scancode tables. TOFU store. |
