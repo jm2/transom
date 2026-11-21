@@ -31,4 +31,11 @@ else
     echo "warning: cargo-deny not installed (cargo install --locked cargo-deny); skipping" >&2
 fi
 
+if [[ "${1:-}" != "--core" ]]; then
+    step "flatpak cargo sources"
+    python3 -I build-aux/flatpak/cargo-sources.py Cargo.lock \
+        | diff -q build-aux/flatpak/cargo-sources.json - >/dev/null \
+        || { echo "build-aux/flatpak/cargo-sources.json is stale: run build-aux/flatpak/cargo-sources.py Cargo.lock > build-aux/flatpak/cargo-sources.json" >&2; exit 1; }
+fi
+
 step "ok"

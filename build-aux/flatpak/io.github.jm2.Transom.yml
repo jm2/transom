@@ -1,0 +1,106 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Flatpak manifest for Transom. Build:
+#   flatpak run org.flatpak.Builder --user --install --force-clean \
+#       _flatpak build-aux/flatpak/io.github.jm2.Transom.yml
+# Regenerate cargo-sources.json after Cargo.lock changes:
+#   build-aux/flatpak/cargo-sources.py Cargo.lock > build-aux/flatpak/cargo-sources.json
+id: io.github.jm2.Transom
+runtime: org.gnome.Platform
+runtime-version: "51"
+sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+  - org.freedesktop.Sdk.Extension.llvm23
+command: transom
+finish-args:
+  - --share=network        # the RDP connection
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  - --socket=pulseaudio    # remote audio and microphone
+  # Passwords: libsecret uses the Secret portal inside the sandbox; no extra access.
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/llvm23/bin
+  env:
+    LIBCLANG_PATH: /usr/lib/sdk/llvm23/lib
+modules:
+  - name: freerdp
+    buildsystem: cmake-ninja
+    builddir: true
+    config-opts:
+      - -DCMAKE_BUILD_TYPE=Release
+      - -DBUILD_TESTING=OFF
+      - -DWITH_SAMPLE=OFF
+      - -DWITH_MANPAGES=OFF
+      - -DWITH_CLIENT=ON
+      - -DWITH_CLIENT_COMMON=ON
+      - -DWITH_CLIENT_SDL=OFF
+      - -DWITH_X11=OFF
+      - -DWITH_WAYLAND=OFF
+      - -DWITH_SERVER=OFF
+      - -DWITH_SHADOW=OFF
+      - -DWITH_PROXY=OFF
+      - -DWITH_PLATFORM_SERVER=OFF
+      - -DWITH_WINPR_TOOLS=OFF
+      - -DWITH_CUPS=OFF
+      - -DWITH_PCSC=OFF
+      - -DWITH_SMARTCARD_EMULATE=OFF
+      - -DWITH_FUSE=OFF
+      # H.264 through FFmpeg: built against the SDK's libavcodec; the decoder itself
+      # comes from the runtime's org.freedesktop.Platform.codecs-extra extension.
+      # (OpenH264 can't be built from source: Cisco's patent licence covers only
+      # their binaries.) Transom probes at startup and only then advertises H.264.
+      - -DWITH_FFMPEG=ON
+      - -DWITH_SWSCALE=ON
+      - -DWITH_DSP_FFMPEG=OFF
+      - -DWITH_VIDEO_FFMPEG=OFF
+      - -DWITH_GFX_AV1=OFF
+      - -DWITH_OPENH264=OFF
+      - -DWITH_PULSE=ON
+      - -DWITH_ALSA=OFF
+      - -DWITH_OSS=OFF
+      - -DWITH_FDK_AAC=OFF
+      - -DWITH_LAME=OFF
+      - -DWITH_FAAD2=OFF
+      - -DWITH_FAAC=OFF
+      - -DWITH_SOXR=OFF
+      - -DWITH_GSM=OFF
+      - -DWITH_URIPARSER=OFF
+      - -DWITH_CAIRO=OFF
+      - -DWITH_AAD=OFF
+      - -DWITH_SSO_MIB=OFF
+      - -DWITH_KRB5=ON
+      - -DCHANNEL_URBDRC=OFF
+      - -DCHANNEL_RDPECAM_CLIENT=OFF
+    cleanup:
+      - /include
+      - /lib/pkgconfig
+      - /lib/cmake
+      - /share/man
+    sources:
+      - type: archive
+        url: https://github.com/FreeRDP/FreeRDP/releases/download/3.33.1/freerdp-3.33.1.tar.gz
+        sha256: 4431bbf04d370545cfe2924b9d9f116b95c90c64ff156b2550bbaf82d34e7124
+
+  - name: transom
+    buildsystem: simple
+    build-options:
+      env:
+        CARGO_HOME: /run/build/transom/cargo
+        CARGO_NET_OFFLINE: "true"
+    build-commands:
+      - cargo --offline build --release --locked -p transom
+      - install -Dm755 target/release/transom /app/bin/transom
+      - install -Dm644 data/io.github.jm2.Transom.desktop /app/share/applications/io.github.jm2.Transom.desktop
+      - install -Dm644 data/io.github.jm2.Transom.metainfo.xml /app/share/metainfo/io.github.jm2.Transom.metainfo.xml
+      - install -Dm644 data/io.github.jm2.Transom.mime.xml /app/share/mime/packages/io.github.jm2.Transom.xml
+      - install -Dm644 data/icons/hicolor/scalable/apps/io.github.jm2.Transom.svg /app/share/icons/hicolor/scalable/apps/io.github.jm2.Transom.svg
+    sources:
+      - type: dir
+        path: ../..
+        skip:
+          - target
+          - _flatpak
+          - .flatpak-builder
+      - cargo-sources.json

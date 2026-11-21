@@ -18,8 +18,9 @@ jobs:
       - name: Install system dependencies
         run: >
           dnf install -y --setopt=install_weak_deps=False
-          git gcc clang-devel pkgconf-pkg-config rustup
-          freerdp-devel libwinpr-devel gtk4-devel libadwaita-devel
+          git gcc clang-devel pkgconf-pkg-config rustup python3
+          freerdp-devel libwinpr-devel gtk4-devel libadwaita-devel libsecret-devel
+          gobject-introspection-devel vala mutter dbus-daemon
       - uses: actions/checkout@v4
       - name: Install Rust
         run: |
@@ -28,6 +29,28 @@ jobs:
       - name: Install cargo-deny
         run: cargo install --locked cargo-deny
       - run: scripts/verify.sh
+      - name: C API, GIR, typelib, VAPI and the Vala sample
+        run: |
+          scripts/build-gir.sh --debug
+          valac --pkg gtk4 --pkg transom-view-0 --vapidir build/capi/share/vala/vapi \
+            -X -Ibuild/capi/include/transom-view-0 -X -Lbuild/capi/lib -X -ltransom-view-0 \
+            examples/vala/transom-view-demo.vala -o build/transom-view-demo-vala
+
+  flatpak:
+    name: Flatpak (GNOME 51)
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-51
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+      - name: Vendored cargo sources match Cargo.lock
+        run: python3 build-aux/flatpak/cargo-sources.py Cargo.lock | diff -u build-aux/flatpak/cargo-sources.json -
+      - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          bundle: transom.flatpak
+          manifest-path: build-aux/flatpak/io.github.jm2.Transom.yml
+          cache-key: flatpak-builder-${{ hashFiles('build-aux/flatpak/*', 'Cargo.lock') }}
 
   core:
     name: transom-view-core (${{ matrix.os }})

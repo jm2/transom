@@ -180,7 +180,7 @@ Each phase ends with its Definition of Done (DoD) demonstrated and logged in §1
 - [x] Connection list, profiles (TOML), libsecret, quick connect, tabs, fullscreen.
 - [x] `.rdp` import, `rdp://` URI, desktop file + MIME registration.
 - [x] Cert-trust UI (fingerprint, remember, changed-cert warning that blocks by default).
-- [ ] Flatpak manifest building in CI.
+- [x] Flatpak manifest building in CI (`build-aux/flatpak/`, GNOME 51; built and smoke-tested locally).
 - **DoD:** daily-drivable against antec-win and a grd host.
 
 ### Phase 3 — Channels (2–3 weeks)
@@ -201,9 +201,9 @@ Each phase ends with its Definition of Done (DoD) demonstrated and logged in §1
 - **DoD:** connect through a Windows RD Gateway to a domain host using Kerberos.
 
 ### Phase 5 — Library packaging for other consumers (1–2 weeks)
-- [ ] `transom-view-capi`: stable C ABI, GObject type `TransomView`, GIR + VAPI generation,
-      pkg-config file, ABI versioning.
-- [ ] A Vala example app proving it's consumable by Connections.
+- [x] `transom-view-capi`: stable C ABI, GObject type `TransomView`, GIR + VAPI generation,
+      pkg-config file, ABI versioning (`scripts/build-gir.sh`, libtransom-view-0.so.0).
+- [x] A Vala example app proving it's consumable by Connections (plus Python; both connect to grd).
 - **DoD:** a GIR-based Python or Vala sample shows a session.
 
 ### Phase 6 — Performance and polish (ongoing)
