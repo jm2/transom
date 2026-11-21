@@ -81,7 +81,8 @@ it lacks CA validation and has incomplete client H.264 (AVC420 only) and redirec
 Let `s = gdk_surface_get_scale(surface)` (fractional, GTK ≥ 4.12; fall back to
 `widget.scale_factor()`), and `(lw, lh)` = widget logical size.
 
-1. **Requested desktop size** = `(round(lw*s), round(lh*s))`, width forced even, clamped to
+1. **Requested desktop size** = `(floor(lw*s), floor(lh*s))` of the *snapped* widget size (amended
+   2026-11-21: `round` could ask for a half-covered pixel at fractional scales), width forced even, clamped to
    MS-RDPEDISP limits (200–8192). Apply at connect (`FreeRDP_DesktopWidth/Height`) and in
    every Display Control monitor-layout PDU.
 2. **Scale factors**: `DesktopScaleFactor = clamp(round(s*100), 100, 500)`;
@@ -168,9 +169,9 @@ Each phase ends with its Definition of Done (DoD) demonstrated and logged in §1
 - [ ] FreeRDP backend: connect, NLA, TOFU cert (system-CA validation first; TOFU fallback
       prompt), GFX negotiation, frames, pointer, keyboard (scancode via XKB keycode→scancode),
       mouse, wheel.
-- [ ] `TransomView` rendering per §3–§4 with damage-region uploads.
-- [ ] Display Control dynamic resize with scale factors; debounce; scale-change handling.
-- [ ] Demo binary `transom-view-demo host user`.
+- [x] `TransomView` rendering per §3–§4 with damage-region uploads (tiled, ADR 0004).
+- [x] Display Control dynamic resize with scale factors; debounce; scale-change handling.
+- [x] Demo binary `transom-view-demo host user` (`cargo run -p transom-view --example transom-view-demo`).
 - **DoD:** on a 200% GNOME host, Windows 11 at 200% and grd at 200% both render pixel-exact
   (verified with a 1-px checkerboard / ClearType text test pattern and a screenshot diff),
   survive window resize and a move between 100% and 200% monitors, and keep cursor size correct.
@@ -257,3 +258,4 @@ Integration tests against a headless grd in a VM are optional, behind `--feature
 | Date | Session | Phase | Summary | Next |
 |---|---|---|---|---|
 | 2026-11-21 | 1 | 0 → 1 | Relicensed everything GPL-3.0-or-later. Cross-platform (macOS/Win11, Tributary/Balun-style) adopted as a design constraint (ADR 0002). Workspace + `verify.sh` + cargo-deny + CI (Linux full, macOS/Windows core). ADR 0001: own bindgen over system FreeRDP 3 (≥ 3.10). ADR 0003: GTK 4.16 / adw 1.6 floor (proposed). Core: geometry (§3.1/2/5/6, 24 unit+property tests), engine trait v0, config, cert fingerprints. FreeRDP backend: context, settings, TLS cert callback → `CertificatePrompt`, NLA auth, GDI damage → `SharedFrame`, DesktopResize, Display Control layouts (200 ms rate limit), pointer, keyboard/mouse/wheel input. Spike reaches antec-win: cert prompt OK (fingerprint `FE:ED:C4:52:…`), bad password → `AuthenticationFailed`. Headless grd 51 test container (`scripts/test-servers.sh`): spike frames at 100% (1280×800), 150% (1920×1200, 150/140) and 200% (2560×1600, 200/180), all honoured by grd and rendered at the requested scale. KVM unavailable on antec (SVM disabled in BIOS) → Windows VM pending. | Spike frame PNG with real creds (antec-win + grd). `TransomView` widget. Keycode→scancode tables. TOFU store. |
+| 2026-11-21 | 1b | 1 | `TransomView` widget: tiled rendering in device px (ADR 0004), origin snapping, Display Control renegotiation (150 ms debounce), surface-scale tracking, keyboard (evdev/macOS scancode tables in core; Unicode fallback), mouse incl. back/forward, hi-res wheel, remote cursor via `Cursor::from_callback`, focus lock-sync and key release, clean `shutdown()`. Demo binary. `scripts/view-check.sh`: headless mutter + GSK render vs framebuffer: **pixel-exact at 100/125/150/166.7/200%, after window resize and after a 100→200% scale change** against grd 51. Found+fixed: texture-scale-node blur at 200%, fractional tile seams, half-covered-pixel request (§3.1 now floor), exit-time SIGSEGV. | Windows VM (needs SVM in BIOS) for the Windows half of Phase 0/1 DoD; cursor-size check; TOFU trust store; input tests; Windows keycode path. |
