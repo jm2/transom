@@ -1,0 +1,13 @@
+[Desktop Entry]
+Name=Transom
+GenericName=Remote Desktop Client
+Comment=Connect to Windows and GNOME computers over RDP
+Exec=transom %U
+Icon=io.github.jm2.Transom
+Terminal=false
+Type=Application
+Categories=GTK;GNOME;Network;RemoteAccess;
+Keywords=RDP;remote;desktop;Windows;mstsc;
+MimeType=application/x-rdp;x-scheme-handler/rdp;
+StartupNotify=true
+StartupWMClass=io.github.jm2.Transom

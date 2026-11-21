@@ -1,6 +1,21 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Transom application entry point. Implemented in Phase 2.
+//! Transom: a focused, HiDPI-correct RDP client.
 
-fn main() {
-    eprintln!("transom: not implemented yet (Phase 2); see PLAN.md");
+mod app;
+mod dev;
+mod dialogs;
+mod secrets;
+mod session;
+mod window;
+
+fn main() -> gtk::glib::ExitCode {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                "transom=info,transom_view=info,transom_view_freerdp=info".into()
+            }),
+        )
+        .with_writer(std::io::stderr)
+        .init();
+    app::run()
 }

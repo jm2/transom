@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.jm2.Transom</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>Transom</name>
+  <summary>Sharp remote desktops over RDP</summary>
+  <developer id="io.github.jm2">
+    <name>Transom Contributors</name>
+  </developer>
+  <description>
+    <p>
+      Transom connects to Windows and GNOME computers using the Remote Desktop Protocol.
+      It is built for modern high-resolution displays: remote sessions are rendered
+      pixel for pixel at 100%, 200% and fractional scales, never blurrily upscaled.
+    </p>
+    <ul>
+      <li>Pixel-exact HiDPI and fractional scaling</li>
+      <li>Works with Windows and GNOME Remote Desktop</li>
+      <li>Saved connections with passwords in your keyring</li>
+      <li>Opens .rdp files and rdp:// links</li>
+      <li>Tabs, separate windows and fullscreen</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">io.github.jm2.Transom.desktop</launchable>
+  <url type="homepage">https://github.com/jm2/transom</url>
+  <url type="bugtracker">https://github.com/jm2/transom/issues</url>
+  <content_rating type="oars-1.1"/>
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+  <requires>
+    <display_length compare="ge">360</display_length>
+  </requires>
+  <provides>
+    <binary>transom</binary>
+    <mediatype>application/x-rdp</mediatype>
+  </provides>
+  <releases>
+    <release version="0.0.1" date="2026-11-21">
+      <description><p>First development snapshot.</p></description>
+    </release>
+  </releases>
+</component>

@@ -11,7 +11,15 @@ authors.workspace = true
 [dependencies]
 adw.workspace = true
 gtk.workspace = true
+tracing.workspace = true
 transom-view.workspace = true
+transom-view-freerdp.workspace = true
+# tracing-subscriber: RUST_LOG-controlled logging to stderr.
+tracing-subscriber = { version = "0.3", default-features = false, features = ["env-filter", "fmt", "ansi"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# libsecret: password storage on Linux (Secret Service; works in Flatpak via the portal).
+libsecret = "0.9"
 
 [lints]
 workspace = true
