@@ -9,7 +9,8 @@ use crate::geometry::{DesktopRequest, FitMode, ScaleMode};
 pub const DEFAULT_PORT: u16 = 3389;
 
 /// Transport security the client will negotiate.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum SecurityMode {
     /// Let the server choose among NLA, TLS (and nothing weaker).
     #[default]
@@ -21,7 +22,8 @@ pub enum SecurityMode {
 }
 
 /// Certificate policy (PLAN.md §9: default is verify).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum CertPolicy {
     /// System CA, then the TOFU store, then ask the user.
     #[default]

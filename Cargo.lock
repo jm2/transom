@@ -1322,8 +1322,10 @@ version = "0.0.1"
 dependencies = [
  "proptest",
  "secrecy",
+ "serde",
  "sha2",
  "thiserror",
+ "toml",
 ]
 
 [[package]]

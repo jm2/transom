@@ -6,8 +6,11 @@
 
 pub mod config;
 pub mod engine;
+pub mod fsutil;
 pub mod geometry;
 pub mod keymap;
+pub mod profile;
+pub mod rdpfile;
 pub mod tiles;
 pub mod trust;
 

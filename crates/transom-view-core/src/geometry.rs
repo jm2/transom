@@ -73,19 +73,23 @@ impl ScaleFactors {
 }
 
 /// How the remote desktop scale is chosen for a profile (PLAN.md §3.3).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum ScaleMode {
     /// Device-pixel desktop with the local scale forwarded. Pixel-exact.
     #[default]
+    #[serde(rename = "match")]
     MatchLocal,
     /// Device-pixel desktop, but the remote UI scale is fixed to this percentage.
     Fixed(u32),
     /// Logical-size desktop at 100%, stretched locally. For servers that ignore scale.
+    #[serde(rename = "legacy")]
     Legacy100,
 }
 
 /// How the remote framebuffer is placed when it doesn't match the widget (PLAN.md §3.5).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum FitMode {
     /// Scale to fit, preserving aspect ratio, letterboxed and centred.
     #[default]

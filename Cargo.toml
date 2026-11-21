@@ -25,9 +25,11 @@ adw = { version = "0.9", package = "libadwaita", features = ["v1_6"] }
 gtk = { version = "0.11", package = "gtk4", features = ["v4_16"] }
 proptest = "1.12"
 secrecy = "0.10"
+serde = { version = "1", features = ["derive"] }
 sha2 = "0.10"
 thiserror = "2"
 tracing = "0.1"
+toml = "1"
 
 [workspace.lints.rust]
 unsafe_code = "deny"

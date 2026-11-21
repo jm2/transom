@@ -1,6 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Server certificate identity. The trust *store* (TOFU persistence) arrives in
-//! Phase 1/2; this module defines what we show and compare.
+//! Server certificate identity and the trust-on-first-use store.
+//!
+//! Flow (PLAN §9): FreeRDP validates against the system CA first; only certificates
+//! it can't validate reach us. Those are checked against [`TrustStore`]: a known
+//! fingerprint connects silently, an unknown one asks the user, and a *changed* one
+//! is blocked by default with a prominent warning.
+
+use std::collections::BTreeMap;
+use std::io;
+use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
@@ -47,6 +55,117 @@ pub fn normalize_fingerprint(input: &str) -> Option<String> {
         .map(|i| u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).ok())
         .collect::<Option<_>>()?;
     Some(format_fingerprint(&bytes))
+}
+
+/// Result of looking a certificate up in the [`TrustStore`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TrustStatus {
+    /// This host:port presented this fingerprint before and the user trusted it.
+    Trusted,
+    /// Never seen: ask the user (show the fingerprint for out-of-band comparison).
+    Unknown,
+    /// This host:port previously presented a *different* certificate.
+    Changed { previous: String },
+}
+
+/// Fingerprints the user chose to trust, persisted as TOML.
+#[derive(Debug, Clone)]
+pub struct TrustStore {
+    path: PathBuf,
+    hosts: BTreeMap<String, String>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Default)]
+struct TrustFile {
+    #[serde(default)]
+    hosts: BTreeMap<String, String>,
+}
+
+/// Errors loading the trust store.
+#[derive(Debug, thiserror::Error)]
+pub enum TrustStoreError {
+    #[error("{0}")]
+    Io(#[from] io::Error),
+    #[error("malformed trust store: {0}")]
+    Parse(#[from] toml::de::Error),
+}
+
+fn host_key(host: &str, port: u16) -> String {
+    let h = host
+        .trim()
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_ascii_lowercase();
+    let h = h.trim_end_matches('.');
+    if h.contains(':') {
+        format!("[{h}]:{port}")
+    } else {
+        format!("{h}:{port}")
+    }
+}
+
+impl TrustStore {
+    /// Load from `path`; a missing file is an empty store.
+    pub fn load(path: impl Into<PathBuf>) -> Result<Self, TrustStoreError> {
+        let path = path.into();
+        let hosts = match std::fs::read_to_string(&path) {
+            Ok(text) => {
+                let f: TrustFile = toml::from_str(&text)?;
+                f.hosts
+                    .into_iter()
+                    .filter_map(|(k, v)| {
+                        normalize_fingerprint(&v).map(|fp| (k.to_ascii_lowercase(), fp))
+                    })
+                    .collect()
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => BTreeMap::new(),
+            Err(e) => return Err(e.into()),
+        };
+        Ok(Self { path, hosts })
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn check(&self, host: &str, port: u16, fingerprint: &str) -> TrustStatus {
+        let Some(fp) = normalize_fingerprint(fingerprint) else {
+            return TrustStatus::Unknown;
+        };
+        match self.hosts.get(&host_key(host, port)) {
+            Some(known) if *known == fp => TrustStatus::Trusted,
+            Some(known) => TrustStatus::Changed {
+                previous: known.clone(),
+            },
+            None => TrustStatus::Unknown,
+        }
+    }
+
+    /// Trust `fingerprint` for host:port (replacing any previous one) and save.
+    pub fn remember(&mut self, host: &str, port: u16, fingerprint: &str) -> io::Result<()> {
+        let fp = normalize_fingerprint(fingerprint)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "bad fingerprint"))?;
+        self.hosts.insert(host_key(host, port), fp);
+        self.save()
+    }
+
+    /// Forget host:port and save. Returns whether it was known.
+    pub fn forget(&mut self, host: &str, port: u16) -> io::Result<bool> {
+        let was = self.hosts.remove(&host_key(host, port)).is_some();
+        if was {
+            self.save()?;
+        }
+        Ok(was)
+    }
+
+    fn save(&self) -> io::Result<()> {
+        let body = toml::to_string_pretty(&TrustFile {
+            hosts: self.hosts.clone(),
+        })
+        .map_err(io::Error::other)?;
+        let text = format!("# Transom: server certificates you chose to trust (SHA-256).\n{body}");
+        crate::fsutil::write_atomic(&self.path, text.as_bytes())
+    }
 }
 
 /// Extract the DER bytes of the first `CERTIFICATE` block in a PEM string.
@@ -108,6 +227,40 @@ mod tests {
             Some(b"hello world".to_vec())
         );
         assert_eq!(base64_decode("a!=="), None);
+    }
+
+    #[test]
+    fn trust_store_flow() {
+        let path = std::env::temp_dir()
+            .join(format!("transom-trust-{}", std::process::id()))
+            .join("known-hosts.toml");
+        let a = fingerprint_sha256(b"cert a");
+        let b = fingerprint_sha256(b"cert b");
+        let mut s = TrustStore::load(&path).unwrap();
+        assert_eq!(s.check("Host.LAN.", 3389, &a), TrustStatus::Unknown);
+        s.remember("host.lan", 3389, &a.to_lowercase()).unwrap();
+        // Reload from disk; host matching ignores case and a trailing dot.
+        let s2 = TrustStore::load(&path).unwrap();
+        assert_eq!(s2.check("HOST.lan.", 3389, &a), TrustStatus::Trusted);
+        assert_eq!(s2.check("host.lan", 3390, &a), TrustStatus::Unknown);
+        assert_eq!(
+            s2.check("host.lan", 3389, &b),
+            TrustStatus::Changed {
+                previous: a.clone()
+            }
+        );
+        let mut s3 = s2.clone();
+        s3.remember("[fe80::1]", 3389, &b).unwrap();
+        assert_eq!(s3.check("fe80::1", 3389, &b), TrustStatus::Trusted);
+        assert!(s3.forget("host.lan", 3389).unwrap());
+        assert!(!s3.forget("host.lan", 3389).unwrap());
+        assert_eq!(
+            TrustStore::load(&path).unwrap().check("host.lan", 3389, &a),
+            TrustStatus::Unknown
+        );
+        std::fs::write(&path, "hosts = 5").unwrap();
+        assert!(TrustStore::load(&path).is_err());
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
     #[test]
