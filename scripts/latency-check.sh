@@ -2,10 +2,21 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Key-press-to-frame latency against the grd test server (loopback, software
 # rendering and encoding in the container: a baseline, not a real-network number).
+#   scripts/latency-check.sh [--samples N]                # grd
+#   TARGET=win11|server scripts/latency-check.sh ...      # Windows VM (KVM, loopback)
 set -euo pipefail
 cd "$(dirname "$0")/.."
-STATE="${TMPDIR:-/var/tmp}/transom-test"
+source scripts/lib/target.sh
 cargo build -q --release -p transom-view-freerdp --example latency
+if [[ $T_KIND == windows ]]; then
+    scripts/winvm.sh push "$TARGET" tests/servers/windows/latency-probe.ps1 'C:\transom\latency-probe.ps1'
+    target/release/examples/latency "$T_ADDR" "$T_USER" --password-file "$T_PW" --trust "$T_FP" "$@" &
+    client=$!
+    sleep 3
+    scripts/winvm.sh session-run "$TARGET" "powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File C:\\transom\\latency-probe.ps1 -Seconds 50" >/dev/null
+    wait "$client"
+    exit
+fi
 fp=$(podman logs transom-grd 2>&1 | sed -n 's/^TLS fingerprint: //p' | tail -1)
 podman exec transom-grd pkill -f input-probe || true
 podman cp tests/servers/grd-headless/probe/input-probe.py transom-grd:/tmp/input-probe.py
