@@ -1,13 +1,19 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
 # End-to-end input test: the inputtest example sends a fixed keyboard/mouse script
-# through the FreeRDP engine to the grd test server; a probe app inside the remote
-# session logs what arrived; this script compares the two.
+# through the FreeRDP engine to a test server; a probe inside the remote session logs
+# what arrived; this script compares the two. Then the same through the widget (GTK
+# keycodes -> TransomView keymap -> RDP).
 #
-#   scripts/input-check.sh        (needs scripts/test-servers.sh up)
+#   scripts/input-check.sh                 # grd (scripts/test-servers.sh up)
+#   TARGET=win11 scripts/input-check.sh    # or server (scripts/winvm.sh)
 set -euo pipefail
 cd "$(dirname "$0")/.."
-STATE="${TMPDIR:-/var/tmp}/transom-test"
+source scripts/lib/target.sh
+if [[ $T_KIND == windows ]]; then
+    source tests/servers/windows/input-check.sh
+    exit
+fi
 cargo build -q -p transom-view-freerdp --example inputtest
 fp=$(podman logs transom-grd 2>&1 | sed -n 's/^TLS fingerprint: //p' | tail -1)
 podman exec transom-grd rm -f /tmp/input-probe.log

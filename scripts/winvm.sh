@@ -14,6 +14,8 @@
 #   scripts/winvm.sh exec    win11|server 'PowerShell…'  # run in the guest (guest agent)
 #   scripts/winvm.sh configure win11|server  # re-apply transom-policy.ps1 (RDP policy)
 #   scripts/winvm.sh fingerprint win11|server  # RDP cert SHA-256, read via the guest agent
+#   scripts/winvm.sh push NAME LOCAL 'C:\path'   # copy a file into the guest
+#   scripts/winvm.sh session-run NAME 'cmdline'  # start in the rdp user's interactive session
 #   scripts/winvm.sh stop    win11|server  # ACPI power-off, then kill after 120 s
 #   scripts/winvm.sh destroy win11|server  # delete the VM and its credentials
 #
@@ -70,6 +72,24 @@ while not (st := call("guest-exec-status", pid=pid))["exited"]:
 sys.stdout.write(base64.b64decode(st.get("out-data", "")).decode("utf-8", "replace"))
 sys.stderr.write(base64.b64decode(st.get("err-data", "")).decode("utf-8", "replace"))
 sys.exit(st.get("exitcode", 1))
+PY
+}
+
+guest_push() { # LOCAL REMOTE → copy through the guest agent's file API
+    python3 -I - "$VM/qga.sock" "$1" "$2" <<'PY'
+import base64, json, socket, sys
+s = socket.socket(socket.AF_UNIX); s.settimeout(60); s.connect(sys.argv[1]); f = s.makefile('rw')
+def call(cmd, **args):
+    f.write(json.dumps({"execute": cmd, "arguments": args}) + "\n"); f.flush()
+    while True:
+        r = json.loads(f.readline())
+        if 'error' in r: sys.exit(f"guest agent: {r['error']}")
+        if 'return' in r: return r['return']
+data = open(sys.argv[2], 'rb').read()
+h = call("guest-file-open", path=sys.argv[3], mode="wb")
+for i in range(0, len(data), 48 * 1024):
+    call("guest-file-write", handle=h, **{"buf-b64": base64.b64encode(data[i:i + 48 * 1024]).decode()})
+call("guest-file-close", handle=h)
 PY
 }
 
@@ -240,6 +260,19 @@ shot)
     ;;
 info) info ;;
 exec) running || { echo "not running" >&2; exit 1; }; guest_ps "${3:?PowerShell command}" ;;
+push)
+    running || { echo "not running" >&2; exit 1; }
+    guest_ps "New-Item -ItemType Directory -Force -Path (Split-Path '${4:?REMOTE}') | Out-Null"
+    guest_push "${3:?LOCAL}" "$4"
+    ;;
+session-run)
+    # A scheduled task with an interactive token runs in the user's (RDP) session; the
+    # guest agent itself runs as SYSTEM in session 0, where hooks and clipboards differ.
+    running || { echo "not running" >&2; exit 1; }
+    tr=${3:?cmdline}
+    guest_ps "schtasks /Create /F /TN TransomSession /SC ONCE /ST 23:59 /RU $USER_NAME /IT /RL HIGHEST /TR '$tr' | Out-Null
+schtasks /Run /TN TransomSession"
+    ;;
 fingerprint)
     # Read out of band (guest agent, not the RDP connection), so trusting it is not TOFU.
     running || { echo "not running" >&2; exit 1; }

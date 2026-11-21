@@ -14,15 +14,18 @@ scrolls = [(round(e["dx"]), round(e["dy"])) for e in events if e["t"] == "scroll
 expected_keys = ["h", "e", "l", "l", "o", "Shift_L", "exclam", "Left", "Right", "Home",
                  "Delete", "KP_Enter", "Control_R", "F5", "z"]
 # gnome-remote-desktop injects Unicode input as a keysym via mutter, which can only
-# produce keysyms present in the session keymap (US here), so "eacute" is optional.
-if presses and presses[-1] == "eacute":
+# produce keysyms present in the session keymap (US here), so "eacute" is optional
+# there. Windows takes any Unicode character, so it is required.
+if "--windows" in sys.argv:
+    expected_keys = expected_keys + ["eacute"]
+elif presses and presses[-1] == "eacute":
     presses = presses[:-1]
 expected_buttons = [(1, 50, 50), (1, 100, 100), (3, 200, 150), (2, 300, 200)]
 expected_scroll = [(0, -1), (0, 1), (1, 0)]
 
 if widget:
     # Widget pass: only the focus click and the keys (no Unicode, no wheel).
-    expected_keys = expected_keys[:-1]
+    expected_keys = [k for k in expected_keys if k not in ("z", "eacute")]
     expected_buttons = expected_buttons[:1]
     expected_scroll = []
     buttons = buttons[:1]
