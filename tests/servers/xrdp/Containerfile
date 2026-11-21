@@ -1,0 +1,14 @@
+# Throwaway xrdp 0.10 smoke-test server (Xorg backend, minimal session).
+FROM registry.fedoraproject.org/fedora:45
+RUN dnf install -y --setopt=install_weak_deps=False \
+        xrdp xorgxrdp xorg-x11-server-Xorg openbox xterm xsetroot \
+        dejavu-sans-fonts dejavu-sans-mono-fonts openssl procps-ng passwd \
+    && dnf clean all
+RUN useradd -m rdp \
+    && printf '#!/bin/sh\nxsetroot -solid "#26a269"\nxterm -geometry 80x24+40+40 &\nexec openbox\n' > /home/rdp/.Xclients \
+    && chmod 755 /home/rdp/.Xclients && chown rdp: /home/rdp/.Xclients \
+    && cp /home/rdp/.Xclients /home/rdp/.xsession
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod 755 /usr/local/bin/entrypoint.sh
+EXPOSE 3389
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
