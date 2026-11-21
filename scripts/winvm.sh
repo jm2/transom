@@ -64,7 +64,7 @@ def call(cmd, **args):
         r = json.loads(f.readline())
         if 'error' in r: sys.exit(f"guest agent: {r['error']}")
         if 'return' in r: return r['return']
-enc = base64.b64encode(("$ProgressPreference = 'SilentlyContinue'\n" + sys.argv[2]).encode('utf-16-le')).decode()
+enc = base64.b64encode(("$ProgressPreference = 'SilentlyContinue'; [Console]::OutputEncoding = [Text.Encoding]::UTF8\n" + sys.argv[2]).encode('utf-16-le')).decode()
 pid = call("guest-exec", path="powershell.exe", arg=["-NoProfile", "-NonInteractive",
            "-ExecutionPolicy", "Bypass", "-EncodedCommand", enc], **{"capture-output": True})["pid"]
 while not (st := call("guest-exec-status", pid=pid))["exited"]:

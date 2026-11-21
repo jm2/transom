@@ -2,10 +2,15 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Clipboard round trip against the grd test server: the client offers text and the
 # in-session probe pastes it; then the probe copies text and the client receives it.
-#   scripts/clipboard-check.sh      (needs scripts/test-servers.sh up)
+#   scripts/clipboard-check.sh                # grd (scripts/test-servers.sh up)
+#   TARGET=win11 scripts/clipboard-check.sh   # or server (scripts/winvm.sh)
 set -euo pipefail
 cd "$(dirname "$0")/.."
-STATE="${TMPDIR:-/var/tmp}/transom-test"
+source scripts/lib/target.sh
+if [[ $T_KIND == windows ]]; then
+    source tests/servers/windows/clipboard-check.sh
+    exit
+fi
 podman build -q -t transom-test-grd tests/servers/grd-headless >/dev/null
 cargo build -q -p transom-view-freerdp --example cliptest
 fp=$(podman logs transom-grd 2>&1 | sed -n 's/^TLS fingerprint: //p' | tail -1)

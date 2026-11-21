@@ -29,6 +29,8 @@ powercfg /change standby-timeout-ac 0
 powercfg /change monitor-timeout-ac 0
 powercfg /hibernate off
 Set-Policy 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU' NoAutoUpdate 1
+# Server: no "Shutdown Event Tracker" dialog after an unclean stop (it covers the screen).
+Set-Policy 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Reliability' ShutdownReasonOn 0
 
 # Report what is in effect, so `winvm.sh configure` shows a verifiable result.
 Get-ItemProperty $ts | Select-Object AVC444ModePreferred, AVCHardwareEncodePreferred,
