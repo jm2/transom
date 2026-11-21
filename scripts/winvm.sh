@@ -11,6 +11,8 @@
 #   scripts/winvm.sh run     win11|server [--snapshot]  # boot in the background
 #   scripts/winvm.sh shot    win11|server FILE.png       # screenshot (progress)
 #   scripts/winvm.sh info    win11|server
+#   scripts/winvm.sh exec    win11|server 'PowerShell…'  # run in the guest (guest agent)
+#   scripts/winvm.sh configure win11|server  # re-apply transom-policy.ps1 (RDP policy)
 #   scripts/winvm.sh stop    win11|server  # ACPI power-off, then kill after 120 s
 #   scripts/winvm.sh destroy win11|server  # delete the VM and its credentials
 #
@@ -28,7 +30,7 @@ cmd=${1:-}; name=${2:-}
 case "$name" in
 win11)  PORT=13392; IMAGE=$ISO/win11-eval.iso;      INDEX=1; ROLE=client; HOST=TRANSOM-W11 ;;
 server) PORT=13393; IMAGE=$ISO/server2025-eval.iso; INDEX=4; ROLE=server; HOST=TRANSOM-SRV ;;
-"") [[ $cmd == fetch ]] || { sed -n '8,16p' "$0"; exit 2; } ;;
+"") [[ $cmd == fetch ]] || { sed -n '8,18p' "$0"; exit 2; } ;;
 *) echo "unknown VM '$name' (win11 | server)" >&2; exit 2 ;;
 esac
 # INDEX: install.wim image. Win11 Enterprise eval has one; Server 2025 eval index 4 is
@@ -49,6 +51,27 @@ while True:
 PY
 }
 
+guest_ps() { # SCRIPT → run as SYSTEM in the guest via the QEMU guest agent; prints output
+    python3 -I - "$VM/qga.sock" "$1" <<'PY'
+import base64, json, socket, sys, time
+s = socket.socket(socket.AF_UNIX); s.settimeout(600); s.connect(sys.argv[1]); f = s.makefile('rw')
+def call(cmd, **args):
+    f.write(json.dumps({"execute": cmd, "arguments": args}) + "\n"); f.flush()
+    while True:
+        r = json.loads(f.readline())
+        if 'error' in r: sys.exit(f"guest agent: {r['error']}")
+        if 'return' in r: return r['return']
+enc = base64.b64encode(("$ProgressPreference = 'SilentlyContinue'\n" + sys.argv[2]).encode('utf-16-le')).decode()
+pid = call("guest-exec", path="powershell.exe", arg=["-NoProfile", "-NonInteractive",
+           "-ExecutionPolicy", "Bypass", "-EncodedCommand", enc], **{"capture-output": True})["pid"]
+while not (st := call("guest-exec-status", pid=pid))["exited"]:
+    time.sleep(0.5)
+sys.stdout.write(base64.b64decode(st.get("out-data", "")).decode("utf-8", "replace"))
+sys.stderr.write(base64.b64decode(st.get("err-data", "")).decode("utf-8", "replace"))
+sys.exit(st.get("exitcode", 1))
+PY
+}
+
 running() { [[ -f $VM/qemu.pid ]] && kill -0 "$(cat "$VM/qemu.pid")" 2>/dev/null; }
 
 kvm_ok() { [[ -r /dev/kvm && -w /dev/kvm ]]; }
@@ -66,7 +89,7 @@ start_tpm() {
 qemu_args() {
     local mode=$1
     if kvm_ok; then
-        A=(-accel kvm -cpu host,hv-passthrough -smp 8,sockets=1,cores=4,threads=2)
+        A=(-accel kvm -cpu host,hv-passthrough,topoext=on -smp 8,sockets=1,cores=4,threads=2)
     else
         A=(-accel tcg,thread=multi,tb-size=2048 -cpu max -smp 8,sockets=1,cores=8)
     fi
@@ -173,7 +196,7 @@ prep)
      sed -e "s/@PASSWORD@/$(cat "$VM/password")/g" -e "s/@USER@/$USER_NAME/g" \
          -e "s/@COMPUTER_NAME@/$HOST/" -e "s/@IMAGE_INDEX@/$INDEX/" -e "s/@ROLE@/$ROLE/" \
          "$SRC/autounattend.xml.in" > "$a/autounattend.xml"
-     cp "$SRC/transom-setup.ps1" "$a/"
+     cp "$SRC/transom-setup.ps1" "$SRC/transom-policy.ps1" "$a/"
      xorriso -as mkisofs -quiet -J -r -V TRANSOM_ANSWER -o "$VM/answer.iso" "$a"
      rm -rf "$a")
     patch_boot_iso
@@ -215,6 +238,11 @@ shot)
     echo "$out"
     ;;
 info) info ;;
+exec) running || { echo "not running" >&2; exit 1; }; guest_ps "${3:?PowerShell command}" ;;
+configure)
+    running || { echo "not running: '$0 run $name'" >&2; exit 1; }
+    guest_ps "$(cat "$SRC/transom-policy.ps1")"
+    ;;
 stop)
     running || exit 0
     qmp '{"execute":"system_powerdown"}' >/dev/null
@@ -226,5 +254,5 @@ destroy)
     rm -rf "$VM"
     echo "removed $VM"
     ;;
-*) sed -n '8,16p' "$0"; exit 2 ;;
+*) sed -n '8,18p' "$0"; exit 2 ;;
 esac

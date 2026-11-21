@@ -7,31 +7,9 @@ param([ValidateSet('client', 'server')][string]$Role = 'client')
 $ErrorActionPreference = 'Continue'
 Start-Transcript -Path C:\transom-setup.log -Append
 
-function Set-Policy($Path, $Name, $Value) {
-    New-Item -Path $Path -Force | Out-Null
-    New-ItemProperty -Path $Path -Name $Name -Value $Value -PropertyType DWord -Force | Out-Null
-}
-$ts = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services'
-
-# Graphics: H.264/AVC444 for the whole desktop (exercises Transom's H.264 path), and
-# hardware encode when a GPU is ever attached.
-Set-Policy $ts AVC444ModePreferred 1
-Set-Policy $ts AVCHardwareEncodePreferred 1
-# Redirections Transom implements: audio capture (mic), clipboard, drives (file copy),
-# camera. These are allowed by default; set explicitly so a policy change elsewhere
-# can't silently turn a test into a no-op.
-Set-Policy $ts fDisableAudioCapture 0
-Set-Policy $ts fDisableCdm 0
-Set-Policy $ts fDisableClip 0
-Set-Policy $ts fDisableCameraRedir 0
-# RemoteApp without a Connection Broker (Transom's RemoteApp tests): allow any program.
-Set-Policy 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Terminal Server\TSAppAllowList' fDisabledAllowList 1
-
-# Keep a test VM quiet and awake: no sleep, no surprise update reboots mid-test.
-powercfg /change standby-timeout-ac 0
-powercfg /change monitor-timeout-ac 0
-powercfg /hibernate off
-Set-Policy 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU' NoAutoUpdate 1
+# A policy failure must not skip the password cleanup below; it is logged, and
+# `winvm.sh configure` can re-apply the policy later.
+try { & (Join-Path $PSScriptRoot 'transom-policy.ps1') } catch { Write-Warning "policy: $_" }
 
 if ($Role -eq 'server') {
     schtasks /Change /TN '\Microsoft\Windows\Server Manager\ServerManager' /Disable | Out-Null
