@@ -1,0 +1,22 @@
+[package]
+name = "transom-view-capi"
+description = "C ABI for transom-view (GObject type TransomView; GIR/VAPI generated from it)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[lib]
+name = "transom_view_capi"
+crate-type = ["cdylib"]
+
+[dependencies]
+gtk.workspace = true
+transom-view.workspace = true
+transom-view-freerdp.workspace = true
+
+[lints]
+workspace = true

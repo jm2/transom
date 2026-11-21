@@ -1407,6 +1407,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "transom-view-capi"
+version = "0.0.1"
+dependencies = [
+ "gtk4",
+ "transom-view",
+ "transom-view-freerdp",
+]
+
+[[package]]
 name = "transom-view-core"
 version = "0.0.1"
 dependencies = [

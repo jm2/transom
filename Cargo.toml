@@ -4,6 +4,7 @@ members = [
     "crates/transom-view-core",
     "crates/transom-view-freerdp",
     "crates/transom-view",
+    "crates/transom-view-capi",
     "crates/transom",
 ]
 default-members = ["crates/transom-view-core"]

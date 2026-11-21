@@ -26,5 +26,8 @@ rustc-ice-*.txt
 
 # Flatpak / Meson build dirs
 .flatpak-builder/
+.flatpak-builder-build.log
 build-dir/
 _build/
+_flatpak/
+build/
