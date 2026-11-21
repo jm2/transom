@@ -869,7 +869,10 @@ fn build_multimon(app: &gtk::Application, args: Args, code: Rc<Cell<u8>>) {
             }
             let n = ticks.get() + 1;
             ticks.set(n);
-            if n < 24 {
+            // Like the single-view check: start after 6 s, then once a second for up
+            // to 3 more tries (Windows 11 resizes again after the monitor layout
+            // arrives and repaints for a moment after that).
+            if n < 24 || !(n - 24).is_multiple_of(4) {
                 return glib::ControlFlow::Continue;
             }
             let (w, h) = views[0].desktop_size().unwrap_or_default();
@@ -881,6 +884,9 @@ fn build_multimon(app: &gtk::Application, args: Args, code: Rc<Cell<u8>>) {
                     .map(|p| p.replace(".png", &format!("-m{i}.png")));
                 print!("monitor {i}: ");
                 all &= run_check_region(v, path.as_deref(), Some((r.x, r.y, r.width, r.height)));
+            }
+            if !all && n < 24 + 4 * 3 {
+                return glib::ControlFlow::Continue;
             }
             code.set(if all { 0 } else { 3 });
             views[0].shutdown(Duration::from_secs(5));
