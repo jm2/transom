@@ -17,8 +17,8 @@ use secrecy::ExposeSecret;
 use transom_view_core::config::{CertPolicy, SecurityMode, SessionConfig};
 use transom_view_core::engine::{
     AuthKind, AuthRequest, CertDecision, CertPrompt, Credentials, DisconnectReason, EngineCommand,
-    EngineError, EngineEvent, EngineHandle, EventSink, InputEvent, MouseButton, PointerEvent,
-    PointerImage, RdpEngine, Rect, SharedFrame, Waker,
+    EngineError, EngineEvent, EngineHandle, EventSink, Finished, InputEvent, MouseButton,
+    PointerEvent, PointerImage, RdpEngine, Rect, SharedFrame, Waker,
 };
 use transom_view_core::geometry::{DesktopRequest, ScaleFactors, Size};
 use transom_view_core::trust::{self, CertInfo};
@@ -85,11 +85,16 @@ impl RdpEngine for FreeRdpEngine {
         });
         let (tx, rx) = mpsc::channel();
         let thread_waker = waker.clone();
+        let finished = Finished::new();
+        let guard = finished.guard();
         thread::Builder::new()
             .name("transom-freerdp".into())
-            .spawn(move || run(config, sink, rx, thread_waker, config_dir))
+            .spawn(move || {
+                let _finished = guard; // set last, even on panic
+                run(config, sink, rx, thread_waker, config_dir)
+            })
             .map_err(|e| EngineError::Init(format!("spawning engine thread: {e}")))?;
-        Ok(EngineHandle::new(tx, waker))
+        Ok(EngineHandle::new(tx, waker, finished))
     }
 }
 
