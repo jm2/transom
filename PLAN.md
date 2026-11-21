@@ -1,0 +1,247 @@
+# Transom + transom-view — RDP client and GTK4 display library
+
+Handoff plan for coding-agent sessions. Read this whole file before writing code.
+Names: **Transom** (the app, binary `transom`) and **transom-view** (the library; crates
+`transom-view*`, GObject type `TransomView`, GIR namespace `TransomView`). Both crate names were
+free on crates.io as of 2026-11-21. Trademark, Flathub app ID and domain checks are still open (§10).
+
+---
+
+## 0. Handoff prompt (paste into the first session)
+
+> You are implementing **transom-view**, a GTK4 RDP display library, and **Transom**, a focused
+> libadwaita RDP client built on it. The spiritual target is "Remmina, RDP-only, done right
+> for modern GNOME." The defining requirement is **correct HiDPI**: a 200% remote Windows or
+> gnome-remote-desktop session on a 200% (or fractional) GNOME host must be pixel-exact, not
+> upscaled. Work in `~/transom` (Cargo workspace). Read `PLAN.md` (this file) fully, then
+> start at the first unchecked phase. Follow the working rules in §9. At the end of each
+> session, update §11 (Progress log) and tick completed checklist items.
+
+---
+
+## 1. Goals and non-goals
+
+**Goals**
+- Pixel-exact HiDPI and fractional scaling: request remote desktop in device pixels, send
+  matching `DesktopScaleFactor`/`DeviceScaleFactor`, render 1:1.
+- First-class interop with **gnome-remote-desktop (GNOME 50+)** and **Windows 10/11 / Server**.
+- A reusable widget library usable from Rust, C, and Vala (GObject Introspection), so GNOME
+  Connections / RDW / Field Monitor could adopt it.
+- Linux/GNOME (Wayland) is the critical target. macOS/Windows builds of the *core* are a
+  later bonus; do not compromise the GNOME UX for them.
+
+**Non-goals (do not add)**
+- Other protocols (VNC, SPICE, SSH), plugin systems, zero-trust launchers, CLI-tool
+  downloaders, monitoring. Large credential-backend matrices (libsecret only for v1).
+
+## 2. Architecture
+
+Cargo workspace, Rust 2024 edition:
+
+| Crate | Kind | Responsibility |
+|---|---|---|
+| `transom-view-core` | lib, no GTK | Engine trait, session state machine, config model, geometry/scale math, `.rdp` file + `rdp://` URI parsing, cert-trust store (TOFU + system CA). Pure, heavily unit-tested. |
+| `transom-view-freerdp` | lib | FreeRDP 3 backend implementing the engine trait via FFI. Owns the FreeRDP event thread. |
+| `transom-view` | lib | `TransomView` GTK4 widget (subclass of `gtk::Widget`): rendering, input, cursor, clipboard bridge, resize/scale negotiation. |
+| `transom-view-capi` | cdylib | C ABI + GIR + VAPI (librsvg is the precedent for Rust→C→GIR). Phase 5. |
+| `transom` | bin | libadwaita app: connection list, profiles, credentials, tabs/windows, preferences. |
+
+**Engine trait (sketch — refine in Phase 0):**
+```rust
+pub trait RdpEngine: Send {
+    fn connect(&mut self, cfg: &SessionConfig, sink: EventSink) -> Result<()>;
+    fn request_layout(&mut self, layout: MonitorLayout);   // Display Control
+    fn send_input(&mut self, ev: InputEvent);
+    fn clipboard(&mut self, op: ClipboardOp);
+    fn disconnect(&mut self);
+}
+pub enum EngineEvent {
+    Connected { desktop: Size, scale: ScaleFactors },
+    FrameUpdate { surface: FrameRef, damage: Vec<Rect> },
+    DesktopResized(Size), Pointer(PointerImage), PointerPos(Point),
+    Clipboard(ClipboardEvent), AuthRequired(AuthRequest), CertificatePrompt(CertInfo),
+    Redirect(RedirectInfo), Disconnected(Reason),
+}
+```
+IronRDP may be added later as a second backend behind the same trait. **Do not** start with it:
+it lacks CA validation and has incomplete client H.264 (AVC420 only) and redirection coverage.
+
+## 3. HiDPI specification (the core requirement — implement exactly)
+
+Let `s = gdk_surface_get_scale(surface)` (fractional, GTK ≥ 4.12; fall back to
+`widget.scale_factor()`), and `(lw, lh)` = widget logical size.
+
+1. **Requested desktop size** = `(round(lw*s), round(lh*s))`, width forced even, clamped to
+   MS-RDPEDISP limits (200–8192). Apply at connect (`FreeRDP_DesktopWidth/Height`) and in
+   every Display Control monitor-layout PDU.
+2. **Scale factors**: `DesktopScaleFactor = clamp(round(s*100), 100, 500)`;
+   `DeviceScaleFactor` = nearest of {100, 140, 180} (a desktop factor is ignored by Windows
+   unless the device factor is one of those). Send at connect (`FreeRDP_DesktopScaleFactor`,
+   `FreeRDP_DeviceScaleFactor`) **and** in every monitor-layout update.
+3. **Per-profile scale mode**: `MatchLocal` (default) | `Fixed(percent)` | `Legacy100`
+   (logical-size desktop at 100%, stretched — for servers that ignore scale).
+4. **Rendering**: the remote frame is a device-pixel texture drawn into a logical rect of
+   `(w/s, h/s)` via `snapshot.append_texture` / `append_scaled_texture`. Use NEAREST filtering
+   when the device→screen ratio is exactly 1, linear otherwise. Snap the origin to whole
+   device pixels so fractional scales stay sharp.
+5. **Fit modes** (when the remote can't resize): `Fit` (letterbox, preserve aspect),
+   `Scroll` (1:1 with scrollbars). All math in device pixels.
+6. **Input mapping**: widget logical coords → `(x*s - offset_x) / fit_ratio` in remote
+   pixels; clamp to desktop. Cover pointer, wheel (incl. hi-res/smooth scroll, chunked to
+   ±120 per event), and touch.
+7. **Cursor**: remote pointer bitmaps arrive at device resolution. Build them with
+   `gdk_cursor_new_from_callback` (GTK ≥ 4.16) so GTK picks the right scale, hotspot ÷ s.
+   Fallback: downscale yourself.
+8. **Scale changes**: listen for `notify::scale` on the surface and for monitor changes;
+   debounce (~150 ms) and re-send the monitor layout. Debounce resize too; don't loop on odd
+   dimensions (compare against the rounded, clamped request, not the raw allocation).
+
+**Put all of 1, 2, 5 and 6 in `transom-view-core::geometry` as pure functions with property tests.**
+
+## 4. Rendering pipeline and performance
+
+- Phase 1: FreeRDP GDI/GFX writes to a system-memory buffer. Upload with
+  `GdkMemoryTextureBuilder` using `set_update_texture` + `set_update_region` (GTK ≥ 4.16) so
+  only damaged regions are re-uploaded. Never copy the full 4K frame per update.
+- Negotiate the GFX pipeline with AVC444 → AVC420 → RemoteFX → planar fallback. Use FreeRDP's
+  FFmpeg path with VA-API hardware decode where available.
+- Later (Phase 6 spike): zero-copy decoded frames as `GdkDmabufTexture` (GTK ≥ 4.14) and/or
+  `GtkGraphicsOffload`. This needs custom handling of FreeRDP's H.264 surface output.
+- Budget: 3840×2160 at 200%, idle desktop < 5% of one core; full-screen video playback
+  should not drop below 30 fps on antec.
+
+## 5. gnome-remote-desktop interop requirements
+
+- All three grd modes: remote assistance, single-user headless, headless remote login
+  (GDM). Remote login hands off from the GDM session to the user's session with an
+  **RDP Server Redirection PDU**: redirection must reconnect transparently, carrying the
+  routing token and credentials.
+- Scale: grd 50 forwards the client's scale (PipeWire `org.gnome.scale` /
+  `org.gnome.preferred-scale` tags). Verify §3 gives a sharp grd session at 200%.
+- Channels to support against grd: GFX (H.264 via grd's VA-API/Vulkan encoders), Display
+  Control, clipboard incl. files, audio out/in, and **camera redirection (MS-RDPECAM)** in
+  Phase 4.
+- Auth: NLA with grd's configured credentials. Kerberos where configured (Phase 4).
+- Cert trust: show the SHA-256 fingerprint in the same format `grdctl` prints, for
+  first-use comparison.
+
+## 6. App (Transom) scope
+
+- libadwaita: `AdwApplicationWindow`, connection list with search, `AdwTabView` for sessions,
+  each session detachable to its own window, true fullscreen (with keyboard-shortcut
+  inhibition via `gtk::Window` / Wayland keyboard-shortcuts-inhibit), and a reveal-on-hover
+  header in fullscreen.
+- Profiles stored as TOML in `$XDG_CONFIG_HOME/transom/`; secrets in **libsecret** only.
+  Import/export `.rdp` files; register as the handler for `application/x-rdp` and `rdp://`.
+- Per-profile: host/port, gateway (RD Gateway, Phase 4), credentials, scale mode, fit mode,
+  multimon, clipboard direction, audio, security (NLA/TLS/RDP), cert policy.
+- Send Ctrl+Alt+Del, a toggle for passing through local keyboard shortcuts, screenshot.
+- Flatpak (`org.gnome.Platform`), bundling FreeRDP 3 + FFmpeg (VA-API). Also native
+  packaging scripts for Arch (AUR) and Fedora (COPR).
+
+## 7. Phases
+
+Each phase ends with its Definition of Done (DoD) demonstrated and logged in §11.
+
+### Phase 0 — Spikes and decisions (≤1 week)
+- [ ] Pick the FreeRDP 3 binding strategy: an existing Rust binding (e.g. the one RDW uses)
+      vs. `bindgen` over the system FreeRDP 3. Write up the choice in `docs/decisions/0001-bindings.md`.
+- [ ] Minimal binary: connect to Windows (antec-win) with FreeRDP, dump one frame to PNG.
+- [ ] Confirm GTK version floor (target ≥ 4.16 for memory-texture updates + cursor callback);
+      document fallbacks if a distro is older.
+- [ ] Freeze the engine trait v0.
+- **DoD:** decisions recorded; the spike connects to both Windows and grd.
+
+### Phase 1 — Widget MVP with correct HiDPI (2–3 weeks)
+- [ ] `transom-view-core::geometry` with property tests (§3 items 1, 2, 5, 6).
+- [ ] FreeRDP backend: connect, NLA, TOFU cert (system-CA validation first; TOFU fallback
+      prompt), GFX negotiation, frames, pointer, keyboard (scancode via XKB keycode→scancode),
+      mouse, wheel.
+- [ ] `TransomView` rendering per §3–§4 with damage-region uploads.
+- [ ] Display Control dynamic resize with scale factors; debounce; scale-change handling.
+- [ ] Demo binary `transom-view-demo host user`.
+- **DoD:** on a 200% GNOME host, Windows 11 at 200% and grd at 200% both render pixel-exact
+  (verified with a 1-px checkerboard / ClearType text test pattern and a screenshot diff),
+  survive window resize and a move between 100% and 200% monitors, and keep cursor size correct.
+
+### Phase 2 — Transom app v0.1 (2 weeks)
+- [ ] Connection list, profiles (TOML), libsecret, quick connect, tabs, fullscreen.
+- [ ] `.rdp` import, `rdp://` URI, desktop file + MIME registration.
+- [ ] Cert-trust UI (fingerprint, remember, changed-cert warning that blocks by default).
+- [ ] Flatpak manifest building in CI.
+- **DoD:** daily-drivable against antec-win and a grd host.
+
+### Phase 3 — Channels (2–3 weeks)
+- [ ] Clipboard: text, HTML, images, **files** (FUSE-backed or temp-dir staged; document choice).
+- [ ] Audio out (rdpsnd) and in (audin) via PipeWire.
+- [ ] grd remote-login **server redirection** end to end.
+- [ ] Multi-monitor (span selected monitors, per-monitor scale in the layout PDU).
+- **DoD:** grd remote login via GDM → user session works without a second prompt; file copy
+  works in both directions with Windows.
+
+### Phase 4 — Enterprise-shaped features (3–4 weeks)
+- [ ] RD Gateway (HTTP/RPC-over-HTTP + WebSocket transport).
+- [ ] Kerberos/NLA with the system Kerberos ccache; smartcard passthrough (optional).
+- [ ] RemoteApp (RAIL) windows as separate GTK windows (stretch).
+- [ ] Camera redirection (MS-RDPECAM) via PipeWire camera portal.
+- **DoD:** connect through a Windows RD Gateway to a domain host using Kerberos.
+
+### Phase 5 — Library packaging for other consumers (1–2 weeks)
+- [ ] `transom-view-capi`: stable C ABI, GObject type `TransomView`, GIR + VAPI generation,
+      pkg-config file, ABI versioning.
+- [ ] A Vala example app proving it's consumable by Connections.
+- **DoD:** a GIR-based Python or Vala sample shows a session.
+
+### Phase 6 — Performance and polish (ongoing)
+- [ ] Zero-copy dmabuf spike; GraphicsOffload; latency measurements.
+- [ ] Accessibility (screen-reader labels on all chrome, high-contrast).
+- [ ] Optional IronRDP backend behind a feature flag.
+
+## 8. Test matrix
+
+| Server | Host | Must pass |
+|---|---|---|
+| Windows 11 Pro 24H2+ | antec-win | Phases 1–3 |
+| Windows Server 2022/2025 + RDS/Gateway | VM | Phase 4 |
+| gnome-remote-desktop 50+ (all 3 modes) | Fedora VM / spare host | Phases 1–3 |
+| xrdp 0.10.x | VM | Smoke test only |
+| macOS server (`macrdp`, sibling project) | mbp16-m1max | When available |
+
+Local hosts: develop on **antec** (Fedora). Test 100%, 125%, 150%, 200% and mixed-scale dual
+monitors. CI: unit + property tests, clippy `-D warnings`, rustfmt, `cargo deny`, Flatpak build.
+Integration tests against a headless grd in a VM are optional, behind `--features it`.
+
+## 9. Working rules for agents
+
+- Run `scripts/verify.sh` (fmt, clippy -D warnings, tests, cargo-deny) before every commit;
+  create it in Phase 0.
+- `unsafe` lives **only** in `transom-view-freerdp` (FFI) and `transom-view-capi`. Every `unsafe` block
+  gets a `// SAFETY:` comment.
+- No new dependencies without a one-line justification in the commit message. Prefer
+  well-maintained crates; no network access at runtime except the RDP connection itself.
+- Secrets: never log credentials. Use `secrecy::SecretString`; never pass passwords on argv
+  or in environment variables.
+- Cert policy default = **verify** (system CA, then TOFU prompt). "Ignore certificate" exists
+  only as an explicit per-profile opt-in with a warning.
+- Small, reviewable commits; Conventional Commits style. Record architectural decisions in
+  `docs/decisions/NNNN-*.md`.
+- When blocked on a design choice listed in §10, stop and ask rather than guessing.
+
+## 10. Open decisions (for John-Michael)
+
+1. App ID and publishing names: proposed `io.github.jm2.Transom`; confirm the GitHub org/repo
+   (`jm2/transom`?), reserve the `transom` and `transom-view*` crate names, and do a trademark /
+   Flathub / domain check before the first public release.
+2. Licensing: suggested library `MIT OR Apache-2.0` (or LGPL-2.1+ if aiming at GNOME),
+   app `GPL-3.0-or-later`.
+3. Upstream ambitions: if GNOME Circle or adoption by Connections is a goal, decide how
+   AI-assisted contributions square with GNOME's policy *before* public release.
+4. Minimum GTK/libadwaita versions (proposed GTK 4.16 / libadwaita 1.6).
+5. Whether cross-platform builds (macOS/Windows) of Transom are in scope at all, or only
+   `transom-view-core` reuse.
+
+## 11. Progress log
+
+| Date | Session | Phase | Summary | Next |
+|---|---|---|---|---|
+| | | | | |
