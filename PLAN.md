@@ -177,9 +177,9 @@ Each phase ends with its Definition of Done (DoD) demonstrated and logged in §1
   survive window resize and a move between 100% and 200% monitors, and keep cursor size correct.
 
 ### Phase 2 — Transom app v0.1 (2 weeks)
-- [ ] Connection list, profiles (TOML), libsecret, quick connect, tabs, fullscreen.
-- [ ] `.rdp` import, `rdp://` URI, desktop file + MIME registration.
-- [ ] Cert-trust UI (fingerprint, remember, changed-cert warning that blocks by default).
+- [x] Connection list, profiles (TOML), libsecret, quick connect, tabs, fullscreen.
+- [x] `.rdp` import, `rdp://` URI, desktop file + MIME registration.
+- [x] Cert-trust UI (fingerprint, remember, changed-cert warning that blocks by default).
 - [ ] Flatpak manifest building in CI.
 - **DoD:** daily-drivable against antec-win and a grd host.
 
@@ -248,7 +248,8 @@ Integration tests against a headless grd in a VM are optional, behind `--feature
    `GPL-3.0-or-later` (`COPYING`). FreeRDP (Apache-2.0) is GPLv3-compatible.
 3. Upstream ambitions: if GNOME Circle or adoption by Connections is a goal, decide how
    AI-assisted contributions square with GNOME's policy *before* public release.
-4. Minimum GTK/libadwaita versions (proposed GTK 4.16 / libadwaita 1.6).
+4. ~~Minimum versions~~ **Decided 2026-11-21:** GTK 4.16 / libadwaita 1.6 / FreeRDP 3.15 /
+   Rust 1.98 (edition 2024). Legacy-free, matching Tributary/Balun (ADR 0003).
 5. ~~Cross-platform scope~~ **Decided 2026-11-21:** keep Transom itself portable to macOS
    and Windows 11 (same GTK app, like Tributary/Balun). Linux stays the priority; per-OS
    packaging comes after v0.1. See `docs/decisions/0002-cross-platform.md`.
@@ -259,3 +260,4 @@ Integration tests against a headless grd in a VM are optional, behind `--feature
 |---|---|---|---|---|
 | 2026-11-21 | 1 | 0 → 1 | Relicensed everything GPL-3.0-or-later. Cross-platform (macOS/Win11, Tributary/Balun-style) adopted as a design constraint (ADR 0002). Workspace + `verify.sh` + cargo-deny + CI (Linux full, macOS/Windows core). ADR 0001: own bindgen over system FreeRDP 3 (≥ 3.10). ADR 0003: GTK 4.16 / adw 1.6 floor (proposed). Core: geometry (§3.1/2/5/6, 24 unit+property tests), engine trait v0, config, cert fingerprints. FreeRDP backend: context, settings, TLS cert callback → `CertificatePrompt`, NLA auth, GDI damage → `SharedFrame`, DesktopResize, Display Control layouts (200 ms rate limit), pointer, keyboard/mouse/wheel input. Spike reaches antec-win: cert prompt OK (fingerprint `FE:ED:C4:52:…`), bad password → `AuthenticationFailed`. Headless grd 51 test container (`scripts/test-servers.sh`): spike frames at 100% (1280×800), 150% (1920×1200, 150/140) and 200% (2560×1600, 200/180), all honoured by grd and rendered at the requested scale. KVM unavailable on antec (SVM disabled in BIOS) → Windows VM pending. | Spike frame PNG with real creds (antec-win + grd). `TransomView` widget. Keycode→scancode tables. TOFU store. |
 | 2026-11-21 | 1b | 1 | `TransomView` widget: tiled rendering in device px (ADR 0004), origin snapping, Display Control renegotiation (150 ms debounce), surface-scale tracking, keyboard (evdev/macOS scancode tables in core; Unicode fallback), mouse incl. back/forward, hi-res wheel, remote cursor via `Cursor::from_callback`, focus lock-sync and key release, clean `shutdown()`. Demo binary. `scripts/view-check.sh`: headless mutter + GSK render vs framebuffer: **pixel-exact at 100/125/150/166.7/200%, after window resize and after a 100→200% scale change** against grd 51. Found+fixed: texture-scale-node blur at 200%, fractional tile seams, half-covered-pixel request (§3.1 now floor), exit-time SIGSEGV. | Windows VM (needs SVM in BIOS) for the Windows half of Phase 0/1 DoD; cursor-size check; TOFU trust store; input tests; Windows keycode path. |
+| 2026-11-21 | 1c | 2 | Pins raised legacy-free to match Tributary/Balun: Rust 1.98 (ed. 2024), GTK 4.16 / adw 1.6, FreeRDP ≥ 3.15. Core: `.rdp` (UTF-16/UTF-8) + `rdp://` (both flavours), TOML profiles (one file each, atomic 0600), TOFU `TrustStore`. App v0.1: connection list + search + quick connect, profile editor, `.rdp` import, `rdp://`/`.rdp` open, tabs (detachable), fullscreen with hover-reveal header and system-shortcut inhibition, app shortcuts handed to the remote while a session is focused (Ctrl+Alt+Enter/Break fullscreen, Ctrl+Alt+End = CAD stay local), cert dialog (changed cert blocks by default), credentials dialog with libsecret “remember”, screenshot, reconnect. Desktop/MIME/metainfo validated; `scripts/install-local.sh`. Headless screenshots via `scripts/app-shot.sh` (empty, list, cert prompt, live 125% session). | Flatpak manifest + CI; xrdp container; grd remote-login container (redirection); input tests; Windows VM once SVM is on. |

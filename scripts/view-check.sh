@@ -17,7 +17,7 @@ user=$(sed -n 1p "$STATE/grd.creds")
 tag=$(echo "$SCALE" | tr . _)
 podman run --rm --network host --userns=keep-id \
     -e SCALE="$SCALE" -e MONITOR="$MONITOR" -e TRANSOM_CHECK_INVALIDATE -e SCALE2 -e SCALE2_AFTER \
-    -v "$PWD/target/debug/examples:/demo:ro,Z" \
+    -v "$PWD/target/debug:/demo:ro,Z" \
     -v "$PWD/tests/servers/view-check/inner.sh:/inner.sh:ro,Z" \
     -v "$STATE:/state:Z" \
     --entrypoint /inner.sh transom-test-grd \

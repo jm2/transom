@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Runs inside the test image: headless mutter with one virtual monitor at $SCALE,
-# then transom-view-demo --check against the grd test server.
+# then $BIN (default: transom-view-demo) with the given arguments.
 set -euo pipefail
 [[ -n "${TRACE:-}" ]] && set -x
 export XDG_RUNTIME_DIR=/tmp/xdg-runtime
@@ -32,4 +32,4 @@ if [[ -n "${SCALE2:-}" ]]; then
           || echo "gdctl could not set scale $SCALE2" ) &
 fi
 export WAYLAND_DISPLAY=wayland-0 GDK_BACKEND=wayland
-exec /demo/transom-view-demo "$@"
+exec "${BIN:-/demo/examples/transom-view-demo}" "$@"
