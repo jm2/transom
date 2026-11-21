@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-or-later */
+/* SPDX-License-Identifier: Apache-2.0 */
 /* Headers bindgen generates FreeRDP 3 bindings from. */
 #include <winpr/wtypes.h>
 #include <winpr/synch.h>

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 //! The backend-neutral RDP engine interface (engine trait v0, PLAN.md §2).
 //!
 //! A backend (FreeRDP today, maybe IronRDP later) runs the protocol on its own thread

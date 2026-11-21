@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 //! Fixed-size tiling of the remote framebuffer.
 //!
 //! Renderers keep one texture per tile and rebuild only the tiles a damage

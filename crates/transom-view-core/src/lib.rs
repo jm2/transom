@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 //! Toolkit-independent core of transom-view.
 //!
 //! No GTK, no FFI, no platform-specific code: this crate builds and tests on Linux,

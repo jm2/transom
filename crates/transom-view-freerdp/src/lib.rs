@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 //! FreeRDP 3 backend for transom-view. All FFI (and all `unsafe`) lives here.
 #![allow(unsafe_code)]
 

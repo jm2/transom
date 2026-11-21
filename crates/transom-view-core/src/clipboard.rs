@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 //! Clipboard formats and their RDP (Windows clipboard) encodings (MS-RDPECLIP).
 //!
 //! The toolkit side speaks MIME types; the wire speaks Windows clipboard formats.

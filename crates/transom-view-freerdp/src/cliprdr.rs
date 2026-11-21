@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 //! Clipboard redirection (MS-RDPECLIP) on FreeRDP's cliprdr client.
 //!
 //! Format negotiation and data transfer only; the toolkit side (what's on the local

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 //! Generate FreeRDP 3 bindings with bindgen against the system library (ADR 0001).
 
 use std::env;

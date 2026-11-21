@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 //! Phase 0 spike: connect with FreeRDP, wait for the screen to settle, write a PNG.
 //!
 //! ```text

@@ -12,7 +12,8 @@ default-members = ["crates/transom-view-core"]
 version = "0.0.1"
 edition = "2024"
 rust-version = "1.98"
-license = "GPL-3.0-or-later"
+# Libraries (transom-view*) are Apache-2.0; the transom app is GPL-3.0-or-later.
+license = "Apache-2.0"
 repository = "https://github.com/jm2/transom"
 authors = ["Transom Contributors"]
 

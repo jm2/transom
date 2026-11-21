@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 //! HiDPI geometry: desktop-size negotiation, scale factors, fit/viewport math and
 //! input-coordinate mapping (PLAN.md §3 items 1, 2, 5, 6).
 //!

@@ -1,5 +1,5 @@
-# cargo-deny configuration. Everything we ship is GPL-3.0-or-later, so dependencies
-# must be GPLv3-compatible.
+# cargo-deny configuration. The libraries are Apache-2.0 and the app GPL-3.0-or-later;
+# dependencies must be compatible with both (the app's GPL deps stay out of the libraries).
 
 [graph]
 all-features = true

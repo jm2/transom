@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 //! Server certificate identity and the trust-on-first-use store.
 //!
 //! Flow (PLAN §9): FreeRDP validates against the system CA first; only certificates

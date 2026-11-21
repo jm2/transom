@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 //! `.rdp` connection files and `rdp://` URIs.
 //!
 //! An `.rdp` file is a list of `key:type:value` lines, where type is `s` (string), `i`

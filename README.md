@@ -30,5 +30,8 @@ scripts/verify.sh
 
 ## License
 
-Transom and transom-view are licensed under the GNU General Public License, version 3 or
-(at your option) any later version. See [COPYING](COPYING).
+- The **transom-view** libraries (`transom-view-core`, `transom-view-freerdp`,
+  `transom-view`) are licensed under the Apache License, Version 2.0
+  ([LICENSE-APACHE](LICENSE-APACHE)).
+- The **Transom** application (`crates/transom`, `data/`) is licensed under the GNU General
+  Public License, version 3 or (at your option) any later version ([COPYING](COPYING)).

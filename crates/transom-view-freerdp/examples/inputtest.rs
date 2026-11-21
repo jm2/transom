@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 //! Sends a fixed input script through the engine, for `scripts/input-check.sh`,
 //! which compares it with what the in-session probe received.
 //!

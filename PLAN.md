@@ -244,8 +244,9 @@ Integration tests against a headless grd in a VM are optional, behind `--feature
 1. App ID and publishing names: proposed `io.github.jm2.Transom`; confirm the GitHub org/repo
    (`jm2/transom`?), reserve the `transom` and `transom-view*` crate names, and do a trademark /
    Flathub / domain check before the first public release.
-2. ~~Licensing~~ **Decided 2026-11-21:** everything (libraries and app) is
-   `GPL-3.0-or-later` (`COPYING`). FreeRDP (Apache-2.0) is GPLv3-compatible.
+2. ~~Licensing~~ **Decided 2026-11-21 (revised):** `transom-view*` libraries
+   **Apache-2.0** (`LICENSE-APACHE`, no MIT); the `transom` app **GPL-3.0-or-later**
+   (`COPYING`). FreeRDP (Apache-2.0) fits both.
 3. Upstream ambitions: if GNOME Circle or adoption by Connections is a goal, decide how
    AI-assisted contributions square with GNOME's policy *before* public release.
 4. ~~Minimum versions~~ **Decided 2026-11-21:** GTK 4.16 / libadwaita 1.6 / FreeRDP 3.15 /

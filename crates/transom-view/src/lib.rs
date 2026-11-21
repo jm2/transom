@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 //! `TransomView`: a GTK4 widget that displays and controls one RDP session with
 //! pixel-exact HiDPI rendering (PLAN.md §3–§4).
 //!

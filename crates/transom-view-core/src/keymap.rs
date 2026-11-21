@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 //! Hardware keycode → RDP (PC/XT set 1) scancode tables.
 //!
 //! RDP keyboard input is positional: we send the scancode of the physical key and the

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 //! [`RdpEngine`] implementation on FreeRDP 3.
 //!
 //! One engine thread per session owns the FreeRDP context. FreeRDP may invoke some

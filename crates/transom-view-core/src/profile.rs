@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 //! Connection profiles: the app's saved connections, stored as one TOML file each.
 //!
 //! Secrets are never part of a profile; the app keeps them in the OS secret store.

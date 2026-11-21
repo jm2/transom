@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 //! Bridges the GDK clipboard and the RDP clipboard channel.
 //!
 //! Local → remote: when the local clipboard changes, announce what it offers;
