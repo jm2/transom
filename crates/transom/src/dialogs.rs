@@ -307,6 +307,12 @@ pub fn profile_editor(
     save.add_css_class("suggested-action");
     save.add_css_class("pill");
     buttons.append(&save);
+    let export = gtk::Button::with_mnemonic("_Export…");
+    export.add_css_class("pill");
+    export.set_tooltip_text(Some("Save as an .rdp file"));
+    if !is_new {
+        buttons.append(&export);
+    }
     let delete = gtk::Button::with_mnemonic("_Delete");
     delete.add_css_class("destructive-action");
     delete.add_css_class("pill");
@@ -370,6 +376,27 @@ pub fn profile_editor(
             };
             d(EditorResult::Saved(p));
             dialog.close();
+        }
+    ));
+    let export_profile = profile.clone();
+    export.connect_clicked(glib::clone!(
+        #[weak]
+        dialog,
+        move |_| {
+            let p = export_profile.clone();
+            let file_dialog = gtk::FileDialog::builder()
+                .title("Export Connection")
+                .initial_name(format!("{}.rdp", p.display_name()))
+                .build();
+            let parent = dialog.root().and_downcast::<gtk::Window>();
+            file_dialog.save(parent.as_ref(), gtk::gio::Cancellable::NONE, move |res| {
+                if let Ok(file) = res
+                    && let Some(path) = file.path()
+                    && let Err(e) = std::fs::write(&path, p.to_rdp().to_utf16le_bytes())
+                {
+                    tracing::warn!("exporting {}: {e}", path.display());
+                }
+            });
         }
     ));
     let id = profile.id.clone();

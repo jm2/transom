@@ -149,6 +149,10 @@ impl MainWindow {
 
         let session_menu = gio::Menu::new();
         session_menu.append(Some("Send Ctrl+Alt+_Del"), Some("win.send-cad"));
+        session_menu.append(
+            Some("Send _Keyboard Shortcuts to Remote"),
+            Some("win.pass-shortcuts"),
+        );
         session_menu.append(Some("Save _Screenshot…"), Some("win.screenshot"));
         session_menu.append(Some("_Disconnect"), Some("win.disconnect"));
         let session_menu_button = gtk::MenuButton::builder()
@@ -310,6 +314,24 @@ impl MainWindow {
     }
 
     fn setup_actions(self: &Rc<Self>) {
+        // Plan §6: while a session has focus, app/system shortcuts go to the remote
+        // (default) or stay local. Re-evaluated on every focus change.
+        let pass = gio::SimpleAction::new_stateful("pass-shortcuts", None, &true.to_variant());
+        let weak = Rc::downgrade(self);
+        pass.connect_activate(move |a, _| {
+            let on = !a.state().and_then(|v| v.get::<bool>()).unwrap_or(true);
+            a.set_state(&on.to_variant());
+            if let Some(w) = weak.upgrade() {
+                w.window.notify("focus-widget");
+                w.toast(if on {
+                    "Keyboard shortcuts go to the remote computer"
+                } else {
+                    "Keyboard shortcuts stay on this computer"
+                });
+            }
+        });
+        self.window.add_action(&pass);
+
         let add = |name: &str, f: WindowAction| {
             let action = gio::SimpleAction::new(name, None);
             let weak: Weak<Self> = Rc::downgrade(self);
@@ -448,6 +470,12 @@ impl MainWindow {
         self.window.connect_focus_widget_notify(move |win| {
             let Some(w) = weak.upgrade() else { return };
             let in_session = GtkWindowExt::focus(win).is_some_and(|f| f.is::<TransomView>());
+            let pass = win
+                .lookup_action("pass-shortcuts")
+                .and_then(|a| a.state())
+                .and_then(|v| v.get::<bool>())
+                .unwrap_or(true);
+            let in_session = in_session && pass;
             if let Some(app) = win.application() {
                 for (action, accels) in app_shortcuts() {
                     let a: &[&str] = if in_session { &[] } else { accels };
@@ -461,7 +489,14 @@ impl MainWindow {
     /// In fullscreen with a session focused, ask the compositor to pass system
     /// shortcuts (Super, Alt+Tab…) to us (GNOME asks the user the first time).
     fn update_inhibit(&self) {
-        let want = self.window.is_fullscreen()
+        let pass = self
+            .window
+            .lookup_action("pass-shortcuts")
+            .and_then(|a| a.state())
+            .and_then(|v| v.get::<bool>())
+            .unwrap_or(true);
+        let want = pass
+            && self.window.is_fullscreen()
             && GtkWindowExt::focus(&self.window).is_some_and(|f| f.is::<TransomView>());
         if want == self.inhibited.get() {
             return;
