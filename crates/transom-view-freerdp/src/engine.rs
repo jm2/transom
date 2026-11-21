@@ -611,6 +611,33 @@ unsafe fn apply_settings(
         set_u32(ffi::FreeRDP_DesktopScaleFactor, cfg.initial.scale.desktop)?;
         set_u32(ffi::FreeRDP_DeviceScaleFactor, cfg.initial.scale.device)?;
     }
+    if let Some(gw) = &cfg.gateway {
+        // RD Gateway: HTTP transport (with WebSocket upgrade when offered), falling
+        // back to RPC over HTTP; the gateway decides.
+        set_bool(ffi::FreeRDP_GatewayEnabled, true)?;
+        set_str(ffi::FreeRDP_GatewayHostname, &gw.host)?;
+        set_u32(ffi::FreeRDP_GatewayPort, gw.port as u32)?;
+        set_bool(ffi::FreeRDP_GatewayHttpTransport, true)?;
+        set_bool(ffi::FreeRDP_GatewayRpcTransport, true)?;
+        set_bool(ffi::FreeRDP_GatewayHttpUseWebsockets, true)?;
+        set_bool(ffi::FreeRDP_GatewayUseSameCredentials, gw.same_credentials)?;
+        // FreeRDP asks (AuthenticateEx, GW_AUTH_*) for whatever is missing here, so
+        // fill the gateway credentials in: the session's when shared.
+        let (u, d, p) = if gw.same_credentials {
+            (&cfg.username, &cfg.domain, &cfg.password)
+        } else {
+            (&gw.username, &gw.domain, &gw.password)
+        };
+        if let Some(u) = u {
+            set_str(ffi::FreeRDP_GatewayUsername, u)?;
+        }
+        if let Some(d) = d {
+            set_str(ffi::FreeRDP_GatewayDomain, d)?;
+        }
+        if let Some(p) = p {
+            set_str(ffi::FreeRDP_GatewayPassword, p.expose_secret())?;
+        }
+    }
     set_u32(ffi::FreeRDP_ColorDepth, 32)?;
 
     set_bool(ffi::FreeRDP_SoftwareGdi, true)?;

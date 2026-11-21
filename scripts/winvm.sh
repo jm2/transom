@@ -57,7 +57,18 @@ PY
 guest_ps() { # SCRIPT → run as SYSTEM in the guest via the QEMU guest agent; prints output
     python3 -I - "$VM/qga.sock" "$1" <<'PY'
 import base64, json, socket, sys, time
-s = socket.socket(socket.AF_UNIX); s.settimeout(600); s.connect(sys.argv[1]); f = s.makefile('rw')
+s = socket.socket(socket.AF_UNIX); s.settimeout(5); s.connect(sys.argv[1])
+# Resynchronise first (fails fast while Windows is still booting, instead of holding
+# the agent's single connection for minutes), then allow long-running commands.
+n = int(time.time() * 1000) % (1 << 30)
+s.sendall(b'\xff' + json.dumps({"execute": "guest-sync-delimited", "arguments": {"id": n}}).encode() + b'\n')
+buf = b""
+try:
+    while json.dumps({"return": n}).encode() not in buf:
+        buf += s.recv(4096)
+except (socket.timeout, OSError):
+    sys.exit("guest agent not answering")
+s.settimeout(600); f = s.makefile('rw')
 def call(cmd, **args):
     f.write(json.dumps({"execute": cmd, "arguments": args}) + "\n"); f.flush()
     while True:
@@ -78,7 +89,17 @@ PY
 guest_push() { # LOCAL REMOTE → copy through the guest agent's file API
     python3 -I - "$VM/qga.sock" "$1" "$2" <<'PY'
 import base64, json, socket, sys
-s = socket.socket(socket.AF_UNIX); s.settimeout(60); s.connect(sys.argv[1]); f = s.makefile('rw')
+s = socket.socket(socket.AF_UNIX); s.settimeout(5); s.connect(sys.argv[1])
+import time
+n = int(time.time() * 1000) % (1 << 30)
+s.sendall(b'\xff' + json.dumps({"execute": "guest-sync-delimited", "arguments": {"id": n}}).encode() + b'\n')
+buf = b""
+try:
+    while json.dumps({"return": n}).encode() not in buf:
+        buf += s.recv(4096)
+except (socket.timeout, OSError):
+    sys.exit("guest agent not answering")
+s.settimeout(60); f = s.makefile('rw')
 def call(cmd, **args):
     f.write(json.dumps({"execute": cmd, "arguments": args}) + "\n"); f.flush()
     while True:
@@ -132,6 +153,8 @@ qemu_args() {
         -display none -vnc "unix:$VM/vnc.sock"
         -pidfile "$VM/qemu.pid")
     local net="user,id=n0,hostfwd=tcp:127.0.0.1:$PORT-:3389"
+    # Server: RD Gateway (HTTPS) on localhost:13443.
+    [[ $name == server ]] && net+=",hostfwd=tcp:127.0.0.1:13443-:443"
     if [[ $mode == install ]]; then
         # No internet during setup: no updates or online-account detours, faster.
         net+=",restrict=on"
@@ -187,7 +210,7 @@ info() {
     [[ -f $VM/fingerprint ]] && fp=$(cat "$VM/fingerprint")
     cat <<INFO
 Windows test VM '$name' ($(running && echo running || echo stopped); $(kvm_ok && echo KVM || echo "TCG, slow"))
-  host:          localhost:$PORT
+  host:          localhost:$PORT$([[ $name == server ]] && echo "   (RD Gateway: localhost:13443)")
   user:          $USER_NAME
   password file: $VM/password
   SHA-256:       ${fp:-(unknown until first connect)}

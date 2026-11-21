@@ -196,7 +196,10 @@ Each phase ends with its Definition of Done (DoD) demonstrated and logged in §1
   works in both directions with Windows.
 
 ### Phase 4 — Enterprise-shaped features (3–4 weeks)
-- [ ] RD Gateway (HTTP/RPC-over-HTTP + WebSocket transport).
+- [x] RD Gateway (HTTP/RPC-over-HTTP + WebSocket transport): `SessionConfig.gateway`, editor
+      group, gateway credential prompt; `scripts/gateway-check.sh` connects to the Server 2025 VM
+      through its own RD Gateway (NTLM, HTTP transport; CAP/RAP events checked). Kerberos to a
+      domain gateway still needs an AD test domain (see DoD).
 - [x] Kerberos/NLA with the system Kerberos ccache (`scripts/kerberos-check.sh`: MIT KDC + grd,
       ticket-only login); smartcard passthrough (optional, not done).
 - [ ] RemoteApp (RAIL) windows as separate GTK windows (stretch).

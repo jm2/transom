@@ -255,6 +255,7 @@ fn build(app: &gtk::Application, args: Args, code: Rc<Cell<u8>>) {
         // Replaced by the view with a request computed from its size and scale.
         initial: desktop_request(args.scale_mode, Default::default(), 1.0),
         monitors: Vec::new(),
+        gateway: None,
     };
 
     let app_weak = app.downgrade();
@@ -844,6 +845,7 @@ fn build_multimon(app: &gtk::Application, args: Args, code: Rc<Cell<u8>>) {
         kerberos: false,
         initial: desktop_request(args.scale_mode, Default::default(), 1.0),
         monitors: layout.clone(),
+        gateway: None,
     };
     leader.connect_desktop_resized(|_, w, h| eprintln!("desktop resized: {w}x{h}"));
     let app2 = app.clone();

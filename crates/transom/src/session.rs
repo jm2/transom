@@ -7,7 +7,7 @@ use std::rc::Rc;
 use adw::prelude::*;
 use gtk::glib;
 use transom_view::TransomView;
-use transom_view::core::engine::{CertDecision, Credentials};
+use transom_view::core::engine::{AuthKind, CertDecision, Credentials};
 use transom_view::core::profile::Profile;
 use transom_view::core::secrecy::SecretString;
 use transom_view::core::trust::TrustStatus;
@@ -122,10 +122,17 @@ impl Session {
         let weak = Rc::downgrade(self);
         self.view.set_auth_handler(move |view, req| {
             let Some(s) = weak.upgrade() else { return };
-            let target = s.profile.borrow().display_name();
+            let gateway = req.kind == AuthKind::Gateway;
+            let target = if gateway {
+                let host = s.profile.borrow().gateway.as_ref().map(|g| g.host.clone());
+                format!("the RD Gateway {}", host.unwrap_or_default())
+            } else {
+                s.profile.borrow().display_name()
+            };
             let s2 = s.clone();
             let failed = s.auth_failures.get() > 0;
-            let can_remember = !s.temporary && secrets::AVAILABLE;
+            // The keyring entry holds the server password; never put a gateway's there.
+            let can_remember = !gateway && !s.temporary && secrets::AVAILABLE;
             let (user, domain) = (req.username.clone(), req.domain.clone());
             dialogs::credentials(
                 view,
@@ -139,11 +146,16 @@ impl Session {
                         if c.remember {
                             *s2.pending_remember.borrow_mut() = Some(c.password.clone());
                         }
-                        {
-                            let mut p = s2.profile.borrow_mut();
+                        let mut p = s2.profile.borrow_mut();
+                        if gateway {
+                            if let Some(g) = p.gateway.as_mut() {
+                                g.username = Some(c.username.clone()).filter(|u| !u.is_empty());
+                            }
+                        } else {
                             p.username = Some(c.username.clone()).filter(|u| !u.is_empty());
                             p.domain = c.domain.clone();
                         }
+                        drop(p);
                         let _ = req.reply.send(Some(Credentials {
                             username: c.username,
                             domain: c.domain,

@@ -6,10 +6,12 @@ use std::rc::Rc;
 
 use adw::prelude::*;
 use gtk::glib;
+use transom_view::core::config::GatewayConfig;
 use transom_view::core::config::{AudioMode, CertPolicy, ClipboardMode, SecurityMode};
 use transom_view::core::engine::{CertDecision, CertPrompt};
 use transom_view::core::geometry::{FitMode, ScaleMode};
-use transom_view::core::profile::Profile;
+use transom_view::core::profile::{Gateway, Profile};
+use transom_view::core::rdpfile::split_host_port;
 use transom_view::core::secrecy::SecretString;
 use transom_view::core::trust::TrustStatus;
 
@@ -306,6 +308,29 @@ pub fn profile_editor(
     security.add(&ignore_cert);
     page.add(&security);
 
+    let gateway = adw::PreferencesGroup::builder()
+        .title("RD Gateway")
+        .description("Connect through a Remote Desktop Gateway (HTTPS)")
+        .build();
+    let gw_host = adw::EntryRow::builder()
+        .title("Gateway Address (optional)")
+        .text(
+            profile
+                .gateway
+                .as_ref()
+                .map(gateway_address)
+                .unwrap_or_default(),
+        )
+        .build();
+    let gw_same = adw::SwitchRow::builder()
+        .title("Use the Same Credentials")
+        .subtitle("Log in to the gateway with this connection's user name and password")
+        .active(profile.gateway.as_ref().is_none_or(|g| g.same_credentials))
+        .build();
+    gateway.add(&gw_host);
+    gateway.add(&gw_same);
+    page.add(&gateway);
+
     let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 12);
     buttons.set_halign(gtk::Align::Center);
     buttons.set_margin_bottom(12);
@@ -375,6 +400,12 @@ pub fn profile_editor(
             p.clipboard = CLIPBOARD_CHOICES[clip.selected() as usize % CLIPBOARD_CHOICES.len()].1;
             p.audio = AUDIO_CHOICES[audio.selected() as usize % AUDIO_CHOICES.len()].1;
             p.microphone = mic.is_active();
+            p.gateway = split_host_port(&gw_host.text()).map(|(host, port)| Gateway {
+                host,
+                port: port.filter(|&p| p != GatewayConfig::DEFAULT_PORT),
+                username: original.gateway.as_ref().and_then(|g| g.username.clone()),
+                same_credentials: gw_same.is_active(),
+            });
             p.security = SECURITY_CHOICES[sec.selected() as usize % SECURITY_CHOICES.len()].1;
             p.certificate = if ignore_cert.is_active() {
                 CertPolicy::Ignore
@@ -416,4 +447,17 @@ pub fn profile_editor(
         }
     ));
     dialog.present(Some(parent));
+}
+
+/// `host` or `host:port` (port shown only when not 443; IPv6 literals bracketed).
+fn gateway_address(g: &Gateway) -> String {
+    let host = if g.host.contains(':') {
+        format!("[{}]", g.host)
+    } else {
+        g.host.clone()
+    };
+    match g.port {
+        Some(p) if p != GatewayConfig::DEFAULT_PORT => format!("{host}:{p}"),
+        _ => host,
+    }
 }

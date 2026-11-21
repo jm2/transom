@@ -3,6 +3,7 @@
 //!
 //! ```text
 //! spike HOST[:PORT] USER [--domain D] [--password-file FILE] [--trust SHA256]
+//!       [--gateway HOST[:PORT] [--gateway-trust SHA256]]   (RD Gateway, same credentials)
 //!       [--size WxH] [--scale S] [--out frame.png] [--settle-ms N]
 //!       [--audio] [--mic] [--stay-ms N]   (audio out / microphone in; stay N ms)
 //!       [--kerberos]   (no password: use the Kerberos ticket in KRB5CCNAME)
@@ -32,6 +33,8 @@ struct Args {
     domain: Option<String>,
     password_file: Option<String>,
     trust: Option<String>,
+    gateway: Option<(String, u16)>,
+    gateway_trust: Option<String>,
     size: (f64, f64),
     scale: f64,
     out: String,
@@ -57,6 +60,8 @@ fn parse() -> Result<Args, String> {
         domain: None,
         password_file: None,
         trust: None,
+        gateway: None,
+        gateway_trust: None,
         size: (1280.0, 800.0),
         scale: 1.0,
         out: "frame.png".into(),
@@ -71,6 +76,17 @@ fn parse() -> Result<Args, String> {
         match flag.as_str() {
             "--domain" => a.domain = Some(val()?),
             "--password-file" => a.password_file = Some(val()?),
+            "--gateway" => {
+                let v = val()?;
+                a.gateway = Some(match v.rsplit_once(':') {
+                    Some((h, p)) => (h.to_string(), p.parse().map_err(|_| "bad gateway port")?),
+                    None => (v, 443),
+                });
+            }
+            "--gateway-trust" => {
+                a.gateway_trust =
+                    Some(normalize_fingerprint(&val()?).ok_or("bad --gateway-trust fingerprint")?)
+            }
             "--trust" => {
                 a.trust = Some(normalize_fingerprint(&val()?).ok_or("bad --trust fingerprint")?)
             }
@@ -186,6 +202,16 @@ fn main() -> ExitCode {
         kerberos: args.kerberos,
         initial,
         monitors: Vec::new(),
+        gateway: args.gateway.clone().map(|(host, port)| {
+            transom_view_core::config::GatewayConfig {
+                host,
+                port,
+                username: None,
+                domain: None,
+                password: None,
+                same_credentials: true,
+            }
+        }),
     };
 
     let cfg_dir = std::env::var_os("TMPDIR")
@@ -270,7 +296,8 @@ fn main() -> ExitCode {
                 if let Some(prev) = &p.previous_fingerprint {
                     eprintln!("  CHANGED from: {prev}");
                 }
-                let ok = args.trust.as_deref() == Some(p.info.fingerprint_sha256.as_str());
+                let fp = Some(p.info.fingerprint_sha256.as_str());
+                let ok = args.trust.as_deref() == fp || args.gateway_trust.as_deref() == fp;
                 if ok {
                     eprintln!("  matches --trust; accepting for this session");
                 } else {

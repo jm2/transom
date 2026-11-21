@@ -63,6 +63,7 @@ fn main() -> ExitCode {
         kerberos: false,
         initial: desktop_request(ScaleMode::MatchLocal, LogicalSize::new(1024.0, 768.0), 1.0),
         monitors: Vec::new(),
+        gateway: None,
     };
     let (tx, rx) = mpsc::channel();
     let engine = FreeRdpEngine::new(std::env::temp_dir().join("transom-cliptest-freerdp"));

@@ -90,6 +90,27 @@ pub struct SessionConfig {
     /// Multi-monitor layout (see `monitors::layout`). Empty or one entry: a single
     /// monitor described by `initial`.
     pub monitors: Vec<crate::monitors::RemoteMonitor>,
+    /// Tunnel through an RD Gateway (MS-TSGU).
+    pub gateway: Option<GatewayConfig>,
+}
+
+/// RD Gateway to connect through. The gateway's TLS certificate goes through the same
+/// trust store and prompt as the server's (keyed by the gateway's host and port).
+#[derive(Debug, Clone)]
+pub struct GatewayConfig {
+    pub host: String,
+    /// Default 443.
+    pub port: u16,
+    pub username: Option<String>,
+    pub domain: Option<String>,
+    /// Never logged; never put on argv or in the environment.
+    pub password: Option<SecretString>,
+    /// Authenticate to the gateway with the session's credentials.
+    pub same_credentials: bool,
+}
+
+impl GatewayConfig {
+    pub const DEFAULT_PORT: u16 = 443;
 }
 
 impl SessionConfig {

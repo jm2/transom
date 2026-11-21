@@ -275,7 +275,7 @@ impl Profile {
             port: self.port,
             username: self.username.clone(),
             domain: self.domain.clone(),
-            password,
+            password: password.clone(),
             security: self.security,
             cert_policy: self.certificate,
             scale_mode: self.scale,
@@ -286,6 +286,22 @@ impl Profile {
             kerberos: self.kerberos,
             initial: desktop_request(self.scale, LogicalSize::new(1024.0, 768.0), 1.0),
             monitors: Vec::new(),
+            gateway: self
+                .gateway
+                .as_ref()
+                .filter(|g| !g.host.is_empty())
+                .map(|g| {
+                    crate::config::GatewayConfig {
+                        host: g.host.clone(),
+                        port: g.port.unwrap_or(crate::config::GatewayConfig::DEFAULT_PORT),
+                        username: g.username.clone(),
+                        domain: None,
+                        // With shared credentials the gateway gets the session password;
+                        // otherwise the engine asks (AuthKind::Gateway).
+                        password: if g.same_credentials { password } else { None },
+                        same_credentials: g.same_credentials,
+                    }
+                }),
         }
     }
 
@@ -489,5 +505,42 @@ mod tests {
         let ids: std::collections::HashSet<_> = (0..1000).map(|_| new_id()).collect();
         assert_eq!(ids.len(), 1000);
         assert!(ids.iter().all(|i| valid_id(i)));
+    }
+
+    #[test]
+    fn gateway_reaches_the_session_config() {
+        use secrecy::ExposeSecret;
+        let mut p = Profile {
+            host: "pc.corp".into(),
+            username: Some("jm".into()),
+            ..Profile::default()
+        };
+        assert!(p.session_config(None).gateway.is_none());
+        p.gateway = Some(Gateway {
+            host: "gw.corp".into(),
+            port: None,
+            username: None,
+            same_credentials: true,
+        });
+        let c = p.session_config(Some(SecretString::from("pw")));
+        let g = c.gateway.expect("gateway");
+        assert_eq!((g.host.as_str(), g.port), ("gw.corp", 443));
+        // Shared credentials: the gateway gets the session password.
+        assert_eq!(
+            g.password.as_ref().map(|p| p.expose_secret().to_string()),
+            Some("pw".into())
+        );
+        p.gateway.as_mut().unwrap().same_credentials = false;
+        p.gateway.as_mut().unwrap().port = Some(8443);
+        let g = p
+            .session_config(Some(SecretString::from("pw")))
+            .gateway
+            .unwrap();
+        // Separate credentials: never the server password; the engine asks instead.
+        assert!(g.password.is_none());
+        assert_eq!(g.port, 8443);
+        // An empty host means no gateway.
+        p.gateway.as_mut().unwrap().host.clear();
+        assert!(p.session_config(None).gateway.is_none());
     }
 }
