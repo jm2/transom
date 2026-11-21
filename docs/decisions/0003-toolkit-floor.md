@@ -1,6 +1,6 @@
 # 0003 — GTK and libadwaita version floor
 
-- Status: proposed (PLAN §10.4 awaits confirmation)
+- Status: accepted (confirmed 2026-11-21)
 - Date: 2026-11-21
 
 ## Decision
@@ -24,11 +24,10 @@ feature `v1_6`). That's the first GTK with:
 | GNOME Platform 49+ (Flatpak) | ≥ 4.20 | ≥ 1.8 | yes |
 | macOS (Homebrew), Windows (MSYS2 / gvsbuild) | current | current | yes |
 
-## Fallbacks
+## Policy: legacy-free
 
-We don't plan to support older GTK in-tree. If a downstream needs it:
-
-- Without 4.16 memory-texture updates: build a full `GdkMemoryTexture` per frame
-  (correct, but costs a 4K copy per update).
-- Without the cursor callback: pre-scale the cursor bitmap to `ceil(scale)` and use
-  `Cursor::from_texture` with the hotspot divided by the scale.
+No compatibility code for anything older than these floors, matching the sibling
+projects Tributary and Balun (both GTK 4.16 / libadwaita 1.6). Distros below the floor
+(e.g. Ubuntu 24.04) use the Flatpak. Toolchain: Rust edition 2024 with an MSRV of
+**1.98**, the same floor as Balun. It's raised deliberately, never just to follow
+`stable`.

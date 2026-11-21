@@ -4,7 +4,7 @@
 use std::env;
 use std::path::PathBuf;
 
-const MIN_FREERDP: &str = "3.10";
+const MIN_FREERDP: &str = "3.15";
 
 fn main() {
     println!("cargo:rerun-if-changed=src/wrapper.h");

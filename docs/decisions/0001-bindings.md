@@ -29,7 +29,8 @@ callbacks and input. Options considered:
   The same mechanism works on Linux distros, Flatpak (`org.gnome.Sdk` with FreeRDP
   built as a module), macOS (Homebrew `freerdp`) and Windows (vcpkg `freerdp`, or
   MSYS2). This keeps ADR 0002 (cross-platform) viable.
-- The minimum supported FreeRDP is **3.10**. Development started on 3.33.1 (Fedora 45).
+- The minimum supported FreeRDP is **3.15** (Debian 13, the oldest current stable distro);
+  no compatibility code for older 3.x. Development started on 3.33.1 (Fedora 45).
 - All `unsafe` stays in `transom-view-freerdp` (PLAN §9). The rest of the crate exposes
   only the safe `transom_view_core::engine::RdpEngine` implementation.
 
