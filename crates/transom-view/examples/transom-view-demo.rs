@@ -52,6 +52,7 @@ struct Args {
     screenshot: Option<String>,
     resize_to: Option<(i32, i32)>,
     check_after_ms: u32,
+    check_after_explicit: bool,
     quit_after_ms: Option<u64>,
     clip_test: bool,
     file_clip_test: bool,
@@ -80,6 +81,7 @@ fn parse() -> Result<Args, String> {
         screenshot: None,
         resize_to: None,
         check_after_ms: 3000,
+        check_after_explicit: false,
         quit_after_ms: None,
         clip_test: false,
         file_clip_test: false,
@@ -125,7 +127,10 @@ fn parse() -> Result<Args, String> {
                     h.parse().map_err(|_| "bad h")?,
                 ));
             }
-            "--check-after-ms" => a.check_after_ms = val()?.parse().map_err(|_| "bad ms")?,
+            "--check-after-ms" => {
+                a.check_after_ms = val()?.parse().map_err(|_| "bad ms")?;
+                a.check_after_explicit = true;
+            }
             "--clip-test" => a.clip_test = true,
             "--file-clip-test" => a.file_clip_test = true,
             "--multimon" => a.multimon = true,
@@ -133,6 +138,10 @@ fn parse() -> Result<Args, String> {
             "--screenshot" => a.screenshot = Some(val()?),
             other => return Err(format!("unknown flag {other}")),
         }
+    }
+    // The resize happens 4 s after connecting: never check before it has settled.
+    if a.resize_to.is_some() && !a.check_after_explicit {
+        a.check_after_ms = a.check_after_ms.max(9000);
     }
     Ok(a)
 }
