@@ -31,3 +31,4 @@ build-dir/
 _build/
 _flatpak/
 build/
+dist/

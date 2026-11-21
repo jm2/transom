@@ -149,7 +149,9 @@ Let `s = gdk_surface_get_scale(surface)` (fractional, GTK ≥ 4.12; fall back to
   multimon, clipboard direction, audio, security (NLA/TLS/RDP), cert policy.
 - Send Ctrl+Alt+Del, a toggle for passing through local keyboard shortcuts, screenshot.
 - Flatpak (`org.gnome.Platform`), bundling FreeRDP 3 + FFmpeg (VA-API). Also native
-  packaging scripts for Arch (AUR) and Fedora (COPR).
+  packaging scripts for Arch (AUR) and Fedora (COPR). *Done: `build-aux/flatpak`,
+  `build-aux/rpm/transom.spec`, `build-aux/arch/PKGBUILD` + `scripts/dist.sh`; RPM and Arch
+  packages test-built (with tests) in clean containers.*
 
 ## 7. Phases
 
@@ -195,7 +197,8 @@ Each phase ends with its Definition of Done (DoD) demonstrated and logged in §1
 
 ### Phase 4 — Enterprise-shaped features (3–4 weeks)
 - [ ] RD Gateway (HTTP/RPC-over-HTTP + WebSocket transport).
-- [ ] Kerberos/NLA with the system Kerberos ccache; smartcard passthrough (optional).
+- [x] Kerberos/NLA with the system Kerberos ccache (`scripts/kerberos-check.sh`: MIT KDC + grd,
+      ticket-only login); smartcard passthrough (optional, not done).
 - [ ] RemoteApp (RAIL) windows as separate GTK windows (stretch).
 - [ ] Camera redirection (MS-RDPECAM) via PipeWire camera portal.
 - **DoD:** connect through a Windows RD Gateway to a domain host using Kerberos.
