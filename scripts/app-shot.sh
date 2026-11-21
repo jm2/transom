@@ -33,6 +33,8 @@ podman run --rm --network host --userns=keep-id \
     -e SCALE="$SCALE" -e MONITOR="${MONITOR:-2560x1600}" -e BIN=/demo/transom \
     -e MONITOR2="${MONITOR2:-}" -e SCALE2_STATIC="${SCALE2_STATIC:-}" \
     -e TRANSOM_DEBUG_ACTIONS="${TRANSOM_DEBUG_ACTIONS:-}" -e RUST_LOG="${RUST_LOG:-}" \
+    -e INJECT="${INJECT:-}" -e INJECT_AFTER="${INJECT_AFTER:-8}" -e A11Y_VERBOSE="${A11Y_VERBOSE:-}" \
+    -v "$PWD/tests/servers/view-check:/checks:ro,Z" \
     -e XDG_CONFIG_HOME=/state/app-config-"$NAME" -e XDG_CACHE_HOME=/tmp/cache \
     -e TRANSOM_DEBUG_SCREENSHOT="/state/app-$NAME.png:$SECS" \
     -v "$PWD/target/debug:/demo:ro,Z" \

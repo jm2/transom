@@ -57,9 +57,11 @@ impl MainWindow {
             .secondary_icon_tooltip_text("Connect")
             .hexpand(true)
             .build();
+        quick.update_property(&[gtk::accessible::Property::Label("Connect to an address")]);
         let search = gtk::SearchEntry::builder()
             .placeholder_text("Search connections")
             .build();
+        search.update_property(&[gtk::accessible::Property::Label("Search connections")]);
         let list = gtk::ListBox::new();
         list.add_css_class("boxed-list");
         list.set_selection_mode(gtk::SelectionMode::None);
@@ -124,6 +126,7 @@ impl MainWindow {
         header.set_title_widget(Some(&title_stack));
         let add_button = gtk::Button::from_icon_name("list-add-symbolic");
         add_button.set_tooltip_text(Some("New Connection"));
+        add_button.update_property(&[gtk::accessible::Property::Label("New Connection")]);
         add_button.set_action_name(Some("win.new-connection"));
         header.pack_start(&add_button);
 
@@ -141,6 +144,7 @@ impl MainWindow {
             .primary(true)
             .tooltip_text("Main Menu")
             .build();
+        menu_button.update_property(&[gtk::accessible::Property::Label("Main Menu")]);
         header.pack_end(&menu_button);
 
         let session_menu = gio::Menu::new();
@@ -152,8 +156,10 @@ impl MainWindow {
             .menu_model(&session_menu)
             .tooltip_text("Session")
             .build();
+        session_menu_button.update_property(&[gtk::accessible::Property::Label("Session Menu")]);
         let fullscreen = gtk::Button::from_icon_name("view-fullscreen-symbolic");
         fullscreen.set_tooltip_text(Some("Fullscreen (Ctrl+Alt+Enter)"));
+        fullscreen.update_property(&[gtk::accessible::Property::Label("Fullscreen")]);
         fullscreen.set_action_name(Some("win.fullscreen"));
         let session_controls = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         session_controls.append(&fullscreen);
@@ -363,6 +369,20 @@ impl MainWindow {
             }),
         );
         add("screenshot", Box::new(|w| w.save_screenshot()));
+        add(
+            "focus-chrome",
+            Box::new(|w| {
+                if w.window.is_fullscreen() {
+                    w.toolbar.set_reveal_top_bars(true);
+                }
+                if w.session_controls.is_visible() {
+                    w.session_controls
+                        .child_focus(gtk::DirectionType::TabForward);
+                } else {
+                    w.add_button.grab_focus();
+                }
+            }),
+        );
     }
 
     /// Hide the header in fullscreen; reveal it when the pointer touches the top edge.
@@ -401,7 +421,8 @@ impl MainWindow {
     /// remote (Ctrl+Q, Ctrl+N… are common there). A few mstsc-style chords stay
     /// local, caught in the capture phase before the session sees them:
     /// Ctrl+Alt+Enter / Ctrl+Alt+Break toggle fullscreen, Ctrl+Alt+End sends
-    /// Ctrl+Alt+Del.
+    /// Ctrl+Alt+Del, Ctrl+Alt+Home moves keyboard focus out of the session to the
+    /// window controls (the only keyboard way out, since the session takes Tab).
     fn setup_keyboard(self: &Rc<Self>) {
         let controller = gtk::ShortcutController::new();
         controller.set_propagation_phase(gtk::PropagationPhase::Capture);
@@ -413,6 +434,8 @@ impl MainWindow {
             (gdk::Key::Break, "win.fullscreen"),
             (gdk::Key::End, "win.send-cad"),
             (gdk::Key::KP_End, "win.send-cad"),
+            (gdk::Key::Home, "win.focus-chrome"),
+            (gdk::Key::KP_Home, "win.focus-chrome"),
         ] {
             controller.add_shortcut(gtk::Shortcut::new(
                 Some(gtk::KeyvalTrigger::new(key, ctrl_alt)),
@@ -510,8 +533,18 @@ impl MainWindow {
                 None => p.address(),
             };
             row.set_subtitle(&glib::markup_escape_text(&sub));
-            row.add_prefix(&gtk::Image::from_icon_name("computer-symbolic"));
+            // Decorative: the row title already says what this is.
+            row.add_prefix(
+                &gtk::Image::builder()
+                    .icon_name("computer-symbolic")
+                    .accessible_role(gtk::AccessibleRole::Presentation)
+                    .build(),
+            );
             let edit = gtk::Button::from_icon_name("document-edit-symbolic");
+            edit.update_property(&[gtk::accessible::Property::Label(&format!(
+                "Edit {}",
+                p.display_name()
+            ))]);
             edit.add_css_class("flat");
             edit.set_valign(gtk::Align::Center);
             edit.set_tooltip_text(Some("Edit"));

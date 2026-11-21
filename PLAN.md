@@ -208,7 +208,9 @@ Each phase ends with its Definition of Done (DoD) demonstrated and logged in §1
 
 ### Phase 6 — Performance and polish (ongoing)
 - [ ] Zero-copy dmabuf spike; GraphicsOffload; latency measurements.
-- [ ] Accessibility (screen-reader labels on all chrome, high-contrast).
+- [x] Accessibility (screen-reader labels on all chrome, high-contrast): AT-SPI audit
+      (`scripts/a11y-check.sh`); Ctrl+Alt+Home moves focus out of the session. High contrast
+      comes from libadwaita (no custom colours).
 - [ ] Optional IronRDP backend behind a feature flag.
 
 ## 8. Test matrix

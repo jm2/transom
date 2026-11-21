@@ -45,6 +45,10 @@ impl std::fmt::Debug for Session {
 impl Session {
     pub fn new(state: Rc<AppState>, profile: Profile, temporary: bool) -> Rc<Self> {
         let view = TransomView::new();
+        view.update_property(&[gtk::accessible::Property::Label(&format!(
+            "Remote desktop: {}",
+            profile.display_name()
+        ))]);
         view.set_hexpand(true);
         view.set_vexpand(true);
         let root = gtk::Overlay::new();
