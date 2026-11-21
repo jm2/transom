@@ -9,8 +9,14 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+# async-channel: carries engine events from the engine thread to the GTK main loop.
+async-channel = "2"
 gtk.workspace = true
+tracing.workspace = true
 transom-view-core.workspace = true
+
+[dev-dependencies]
+transom-view-freerdp.workspace = true
 
 [lints]
 workspace = true
