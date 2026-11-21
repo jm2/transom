@@ -13,7 +13,8 @@ RUN dnf install -y --setopt=install_weak_deps=False \
 
 RUN useradd -m -u 1000 rdp
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod 755 /usr/local/bin/entrypoint.sh
+COPY probe/input-probe.py /usr/local/bin/input-probe
+RUN chmod 755 /usr/local/bin/entrypoint.sh /usr/local/bin/input-probe
 
 USER rdp
 ENV XDG_RUNTIME_DIR=/tmp/xdg-runtime \

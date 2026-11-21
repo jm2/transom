@@ -14,6 +14,7 @@
 //!   --screenshot F.png    with --check: also save the rendered widget
 //!   --resize-to WxH       resize the window 4 s after connecting (tests renegotiation)
 //!   --check-after-ms N    start checking N ms after connecting (default 3000)
+//!   --quit-after-ms N     disconnect cleanly and quit N ms after connecting
 
 use std::cell::{Cell, RefCell};
 use std::process::ExitCode;
@@ -45,6 +46,7 @@ struct Args {
     screenshot: Option<String>,
     resize_to: Option<(i32, i32)>,
     check_after_ms: u32,
+    quit_after_ms: Option<u64>,
 }
 
 fn parse() -> Result<Args, String> {
@@ -69,6 +71,7 @@ fn parse() -> Result<Args, String> {
         screenshot: None,
         resize_to: None,
         check_after_ms: 3000,
+        quit_after_ms: None,
     };
     while let Some(flag) = it.next() {
         let mut val = || it.next().ok_or(format!("{flag} needs a value"));
@@ -111,6 +114,7 @@ fn parse() -> Result<Args, String> {
                 ));
             }
             "--check-after-ms" => a.check_after_ms = val()?.parse().map_err(|_| "bad ms")?,
+            "--quit-after-ms" => a.quit_after_ms = Some(val()?.parse().map_err(|_| "bad ms")?),
             "--screenshot" => a.screenshot = Some(val()?),
             other => return Err(format!("unknown flag {other}")),
         }
@@ -227,7 +231,18 @@ fn build(app: &gtk::Application, args: Args, code: Rc<Cell<u8>>) {
             app.quit();
         }
     });
+    if let Some(ms) = args.quit_after_ms {
+        let app = app.clone();
+        view.connect_connected(move |v| {
+            let (v, app) = (v.clone(), app.clone());
+            glib::timeout_add_local_once(Duration::from_millis(ms), move || {
+                v.shutdown(Duration::from_secs(5));
+                app.quit();
+            });
+        });
+    }
     view.connect_connected(|v| {
+        v.grab_focus();
         let s = v
             .native()
             .and_then(|n| n.surface())
