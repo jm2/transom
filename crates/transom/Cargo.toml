@@ -1,0 +1,17 @@
+[package]
+name = "transom"
+description = "A focused, HiDPI-correct RDP client"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+adw.workspace = true
+gtk.workspace = true
+transom-view.workspace = true
+
+[lints]
+workspace = true

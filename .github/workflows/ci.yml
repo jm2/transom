@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  linux:
+    name: Linux (full workspace)
+    runs-on: ubuntu-latest
+    # Fedora ships FreeRDP >= 3.10, GTK >= 4.16 and libadwaita >= 1.6.
+    container: registry.fedoraproject.org/fedora:latest
+    steps:
+      - name: Install system dependencies
+        run: >
+          dnf install -y --setopt=install_weak_deps=False
+          git gcc clang-devel pkgconf-pkg-config rustup
+          freerdp-devel libwinpr-devel gtk4-devel libadwaita-devel
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        run: |
+          rustup-init -y --profile minimal --component rustfmt,clippy
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - name: Install cargo-deny
+        run: cargo install --locked cargo-deny
+      - run: scripts/verify.sh
+
+  core:
+    name: transom-view-core (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Verify core
+        shell: bash
+        run: scripts/verify.sh --core

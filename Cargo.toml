@@ -1,0 +1,37 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/transom-view-core",
+    "crates/transom-view-freerdp",
+    "crates/transom-view",
+    "crates/transom",
+]
+default-members = ["crates/transom-view-core"]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.88"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/jm2/transom"
+authors = ["Transom Contributors"]
+
+[workspace.dependencies]
+transom-view-core = { path = "crates/transom-view-core", version = "0.0.1" }
+transom-view-freerdp = { path = "crates/transom-view-freerdp", version = "0.0.1" }
+transom-view = { path = "crates/transom-view", version = "0.0.1" }
+
+adw = { version = "0.9", package = "libadwaita", features = ["v1_6"] }
+gtk = { version = "0.11", package = "gtk4", features = ["v4_16"] }
+proptest = "1.12"
+secrecy = "0.10"
+sha2 = "0.10"
+thiserror = "2"
+tracing = "0.1"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }

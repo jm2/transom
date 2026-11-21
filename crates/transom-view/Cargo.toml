@@ -1,0 +1,16 @@
+[package]
+name = "transom-view"
+description = "TransomView: a HiDPI-correct GTK4 RDP display widget"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+gtk.workspace = true
+transom-view-core.workspace = true
+
+[lints]
+workspace = true
