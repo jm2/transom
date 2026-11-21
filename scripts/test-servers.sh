@@ -4,6 +4,7 @@
 # credentials.
 #
 #   scripts/test-servers.sh up      # build + start; prints host, user, fingerprint
+#   scripts/test-servers.sh login-up  # grd remote-login server (systemd + GDM)
 #   scripts/test-servers.sh info    # print connection details again
 #   scripts/test-servers.sh down    # stop and remove containers + credentials
 #
@@ -14,6 +15,7 @@ cd "$(dirname "$0")/.."
 STATE="${TMPDIR:-/var/tmp}/transom-test"
 GRD_PORT=13389
 XRDP_PORT=13390
+LOGIN_PORT=13391
 
 info() {
     local fp
@@ -34,6 +36,16 @@ xrdp 0.10 (smoke test)
   user:          rdp
   password file: $STATE/xrdp.pw
   SHA-256:       $xfp
+INFO
+}
+
+login_info() {
+    cat <<INFO
+gnome-remote-desktop remote login (systemd + GDM; Server Redirection)
+  host:          localhost:$LOGIN_PORT
+  RDP user:      $(sed -n 1p "$STATE/login.creds")   password file: $STATE/login-rdp.pw
+  GNOME login:   $(sed -n 3p "$STATE/login.creds")   password file: $STATE/login-user.pw
+  $(podman exec transom-grd-login cat /run/transom/fingerprint 2>/dev/null || echo "TLS fingerprint: (starting)")
 INFO
 }
 
@@ -68,10 +80,32 @@ up)
     sleep 2
     info
     ;;
+login-up)
+    # Separate because it's heavier (systemd, GDM, a full GNOME session per login).
+    mkdir -p -m 700 "$STATE"
+    (umask 077
+     printf 'rdp\n%s\nalice\n%s\n' "$(openssl rand -base64 18 | tr -d '/+=')" \
+         "$(openssl rand -base64 18 | tr -d '/+=')" > "$STATE/login.creds"
+     sed -n 2p "$STATE/login.creds" > "$STATE/login-rdp.pw"
+     sed -n 4p "$STATE/login.creds" > "$STATE/login-user.pw")
+    podman build -q -t transom-test-grd-login tests/servers/grd-login >/dev/null
+    podman rm -f transom-grd-login >/dev/null 2>&1 || true
+    # systemd as PID 1. label=disable: SELinux's container_t label blocks the mount
+    # namespaces systemd's service sandboxing needs (logind, polkit, accounts).
+    podman run -d --name transom-grd-login --systemd=always --security-opt label=disable \
+        --device /dev/fuse --cap-add SYS_ADMIN -p "127.0.0.1:$LOGIN_PORT:3389" \
+        -v "$STATE/login.creds:/run/transom/creds:ro" transom-test-grd-login >/dev/null
+    for _ in $(seq 60); do
+        podman exec transom-grd-login test -f /run/transom/fingerprint 2>/dev/null && break
+        sleep 1
+    done
+    sleep 3
+    login_info
+    ;;
 info) info ;;
 down)
-    podman rm -f transom-grd transom-xrdp >/dev/null 2>&1 || true
+    podman rm -f transom-grd transom-xrdp transom-grd-login >/dev/null 2>&1 || true
     rm -rf "$STATE"
     ;;
-*) echo "usage: $0 up|info|down" >&2; exit 2 ;;
+*) echo "usage: $0 up|login-up|info|down" >&2; exit 2 ;;
 esac

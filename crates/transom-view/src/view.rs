@@ -379,7 +379,12 @@ mod imp {
                     self.inner.borrow_mut().layout.reset();
                 }
                 EngineEvent::ResizeAvailable => {
-                    self.inner.borrow_mut().resize_available = true;
+                    let mut inner = self.inner.borrow_mut();
+                    inner.resize_available = true;
+                    // A new Display Control channel (first connect or after a
+                    // redirection) knows nothing of our layout: send it again.
+                    inner.layout.reset();
+                    drop(inner);
                     self.schedule_layout();
                 }
                 EngineEvent::ClipboardRemoteFormats(f) => self.clipboard.remote_formats(&obj, f),

@@ -155,6 +155,8 @@ pub(crate) struct State {
     cert_rejected: AtomicBool,
     auth_cancelled: AtomicBool,
     pub(crate) clip: crate::cliprdr::ClipState,
+    /// Set after the first PostConnect; a later PreConnect means a redirection.
+    connected_once: AtomicBool,
 }
 
 impl State {
@@ -269,6 +271,7 @@ fn run(
         cert_rejected: AtomicBool::new(false),
         auth_cancelled: AtomicBool::new(false),
         clip: Default::default(),
+        connected_once: AtomicBool::new(false),
     });
     // SAFETY: `session` upholds FreeRDP's lifecycle; `state` outlives the context.
     let reason = unsafe { session(&state, &rx, &waker, &config_dir) };
@@ -354,7 +357,9 @@ unsafe fn event_loop(
     let mut handles: [ffi::HANDLE; 64] = [ptr::null_mut(); 64];
     let mut pending_layout: Option<DesktopRequest> = None;
     let mut last_layout: Option<Instant> = None;
-    let mut announced = false;
+    // The Display Control instance we last announced; a new one (e.g. after a
+    // server redirection) must be announced again so the UI re-sends its layout.
+    let mut announced: *mut ffi::DispClientContext = ptr::null_mut();
 
     loop {
         handles[0] = waker.event;
@@ -400,8 +405,8 @@ unsafe fn event_loop(
 
         let disp = state.disp.load(Ordering::SeqCst);
         if state.disp_ready.load(Ordering::SeqCst) && !disp.is_null() {
-            if !announced {
-                announced = true;
+            if announced != disp {
+                announced = disp;
                 state.emit(EngineEvent::ResizeAvailable);
             }
             let due = last_layout.is_none_or(|t| t.elapsed() >= LAYOUT_MIN_INTERVAL);
@@ -633,6 +638,16 @@ unsafe extern "C" fn pre_connect(instance: *mut ffi::freerdp) -> ffi::BOOL {
     // SAFETY: valid instance with a context; PubSub copies the handler pointers.
     unsafe {
         let ctx = (*instance).context;
+        if let Some(state) = state(ctx)
+            && state.connected_once.load(Ordering::SeqCst)
+        {
+            let target = cstr_lossy(ffi::freerdp_settings_get_string(
+                (*ctx).settings,
+                ffi::FreeRDP_ServerHostname,
+            ));
+            tracing::info!(%target, "server redirection");
+            state.emit(EngineEvent::Redirecting { target });
+        }
         let ps = (*ctx).pubSub;
         let on: EventHandler = on_channel_connected;
         let off: DisconnectedHandler = on_channel_disconnected;
@@ -682,6 +697,7 @@ unsafe extern "C" fn post_connect(instance: *mut ffi::freerdp) -> ffi::BOOL {
             desktop: ffi::freerdp_settings_get_uint32(s, ffi::FreeRDP_DesktopScaleFactor),
             device: ffi::freerdp_settings_get_uint32(s, ffi::FreeRDP_DeviceScaleFactor),
         };
+        state.connected_once.store(true, Ordering::SeqCst);
         tracing::info!(?size, ?scale, "connected");
         state.emit(EngineEvent::Connected {
             desktop: size,
@@ -716,6 +732,16 @@ unsafe extern "C" fn on_channel_connected(
         let name = CStr::from_ptr((*e).name);
         tracing::debug!(channel = %name.to_string_lossy(), "channel connected");
         if name.to_bytes_with_nul() == ffi::DISP_DVC_CHANNEL_NAME {
+            if state.connected_once.load(Ordering::SeqCst) {
+                // FreeRDP follows Server Redirection PDUs internally; a second Display
+                // Control channel is how we notice (e.g. grd remote login handover).
+                let target = cstr_lossy(ffi::freerdp_settings_get_string(
+                    (*ctx).settings,
+                    ffi::FreeRDP_ServerHostname,
+                ));
+                tracing::info!(%target, "channels reconnected after redirection");
+                state.emit(EngineEvent::Redirecting { target });
+            }
             let disp = (*e).pInterface as *mut ffi::DispClientContext;
             (*disp).custom = ctx.cast();
             (*disp).DisplayControlCaps = Some(disp_caps);

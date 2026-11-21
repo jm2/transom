@@ -1400,6 +1400,7 @@ dependencies = [
  "async-channel",
  "gtk4",
  "tracing",
+ "tracing-subscriber",
  "transom-view-core",
  "transom-view-freerdp",
 ]

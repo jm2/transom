@@ -1,0 +1,22 @@
+# Throwaway gnome-remote-desktop *remote login* server: systemd + GDM + GNOME, grd in
+# system mode. Clients log in at the GDM greeter over RDP and are then redirected
+# (Server Redirection PDU) to their new session.
+FROM registry.fedoraproject.org/fedora:45
+RUN dnf install -y --setopt=install_weak_deps=False \
+        systemd systemd-pam dbus-broker polkit accountsservice passwd \
+        gdm gnome-shell gnome-session gnome-session-wayland-session \
+        gnome-settings-daemon gnome-remote-desktop mutter \
+        pipewire wireplumber pipewire-pulseaudio \
+        mesa-dri-drivers mesa-libEGL openssl fuse3 \
+        adwaita-sans-fonts adwaita-mono-fonts adwaita-icon-theme procps-ng \
+    && dnf clean all
+# No local displays here: don't try to start anything on seat0's (missing) GPU.
+RUN systemctl mask systemd-logind-varlink.socket 2>/dev/null || true; \
+    printf '[daemon]\nWaylandEnable=true\n[security]\n[xdmcp]\n[chooser]\n[debug]\n' > /etc/gdm/custom.conf
+COPY transom-setup.sh /usr/local/sbin/transom-setup
+COPY transom-setup.service /etc/systemd/system/transom-setup.service
+RUN chmod 755 /usr/local/sbin/transom-setup \
+    && systemctl enable transom-setup.service gdm.service gnome-remote-desktop.service \
+    && systemctl set-default graphical.target
+STOPSIGNAL SIGRTMIN+3
+CMD ["/sbin/init"]

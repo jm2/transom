@@ -258,6 +258,40 @@ pub fn from_macos(vk: u32) -> Option<Scancode> {
     }
 }
 
+/// The scancode (and whether Shift is needed) that types `c` on a **US** layout.
+/// For scripted input (tests, "type text" actions); returns `None` for characters
+/// a US keyboard can't type directly.
+pub fn us_ascii(c: char) -> Option<(Scancode, bool)> {
+    const ROWS: [(&str, &str, u8); 4] = [
+        ("`1234567890-=", "~!@#$%^&*()_+", 0x29),
+        ("qwertyuiop[]\\", "QWERTYUIOP{}|", 0x10),
+        ("asdfghjkl;'", "ASDFGHJKL:\"", 0x1E),
+        ("zxcvbnm,./", "ZXCVBNM<>?", 0x2C),
+    ];
+    match c {
+        ' ' => return Some((s(0x39)?, false)),
+        '\n' => return Some((s(0x1C)?, false)),
+        '\t' => return Some((s(0x0F)?, false)),
+        _ => {}
+    }
+    for (lower, upper, first) in ROWS {
+        for (shift, set) in [(false, lower), (true, upper)] {
+            if let Some(i) = set.chars().position(|x| x == c) {
+                // The top row starts with ` (0x29) then 1..= (0x02..0x0D).
+                let code = if first == 0x29 {
+                    if i == 0 { 0x29 } else { 0x01 + i as u8 }
+                } else if first == 0x10 && i == 12 {
+                    0x2B // backslash
+                } else {
+                    first + i as u8
+                };
+                return Some((s(code)?, shift));
+            }
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -272,6 +306,29 @@ mod tests {
         assert_eq!(from_xkb(133), e(0x5B)); // Super_L (evdev 125)
         assert_eq!(from_xkb(0), None);
         assert_eq!(from_xkb(7), None);
+    }
+
+    #[test]
+    fn us_ascii_typing() {
+        let sc = |c| us_ascii(c).map(|(s, sh)| (s.code, sh));
+        assert_eq!(sc('a'), Some((0x1E, false)));
+        assert_eq!(sc('A'), Some((0x1E, true)));
+        assert_eq!(sc('1'), Some((0x02, false)));
+        assert_eq!(sc('!'), Some((0x02, true)));
+        assert_eq!(sc('0'), Some((0x0B, false)));
+        assert_eq!(sc('`'), Some((0x29, false)));
+        assert_eq!(sc('\\'), Some((0x2B, false)));
+        assert_eq!(sc('|'), Some((0x2B, true)));
+        assert_eq!(sc('/'), Some((0x35, false)));
+        assert_eq!(sc('"'), Some((0x28, true)));
+        assert_eq!(sc(' '), Some((0x39, false)));
+        assert_eq!(sc('é'), None);
+        // Every printable ASCII character is typeable, and agrees with evdev.
+        for c in (0x20u8..0x7F).map(char::from) {
+            assert!(us_ascii(c).is_some(), "{c:?}");
+        }
+        assert_eq!(us_ascii('q').unwrap().0, from_evdev(16).unwrap());
+        assert_eq!(us_ascii('m').unwrap().0, from_evdev(50).unwrap());
     }
 
     #[test]

@@ -185,8 +185,9 @@ Each phase ends with its Definition of Done (DoD) demonstrated and logged in §1
 
 ### Phase 3 — Channels (2–3 weeks)
 - [ ] Clipboard: text, HTML, images, **files** (FUSE-backed or temp-dir staged; document choice).
-- [ ] Audio out (rdpsnd) and in (audin) via PipeWire.
-- [ ] grd remote-login **server redirection** end to end.
+      *Text, HTML and images done (`scripts/clipboard-check.sh`); files pending.*
+- [x] Audio out (rdpsnd) and in (audin) via PipeWire (`scripts/audio-check.sh`).
+- [x] grd remote-login **server redirection** end to end (`scripts/login-check.sh`, systemd+GDM container).
 - [ ] Multi-monitor (span selected monitors, per-monitor scale in the layout PDU).
 - **DoD:** grd remote login via GDM → user session works without a second prompt; file copy
   works in both directions with Windows.
