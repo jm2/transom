@@ -7,7 +7,8 @@
 
 use std::fmt;
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::time::Duration;
 
 use secrecy::SecretString;
 
@@ -291,11 +292,58 @@ pub enum EngineError {
     Init(String),
 }
 
-/// UI-side handle to a running engine. Dropping it disconnects.
+/// Set by the engine thread as the very last thing it does, so applications can
+/// wait for a clean exit (FreeRDP must not be torn down by process exit).
+#[derive(Debug, Clone, Default)]
+pub struct Finished(Arc<(Mutex<bool>, Condvar)>);
+
+impl Finished {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn set(&self) {
+        let (lock, cv) = &*self.0;
+        *lock.lock().unwrap_or_else(|e| e.into_inner()) = true;
+        cv.notify_all();
+    }
+
+    pub fn is_set(&self) -> bool {
+        *self.0.0.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Wait up to `timeout`; returns whether the engine finished.
+    pub fn wait(&self, timeout: Duration) -> bool {
+        let (lock, cv) = &*self.0;
+        let guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+        let (guard, _) = cv
+            .wait_timeout_while(guard, timeout, |done| !*done)
+            .unwrap_or_else(|e| e.into_inner());
+        *guard
+    }
+
+    /// A guard that calls [`Finished::set`] when dropped, including on panic.
+    pub fn guard(&self) -> FinishedGuard {
+        FinishedGuard(self.clone())
+    }
+}
+
+/// See [`Finished::guard`].
+#[derive(Debug)]
+pub struct FinishedGuard(Finished);
+
+impl Drop for FinishedGuard {
+    fn drop(&mut self) {
+        self.0.set();
+    }
+}
+
+/// UI-side handle to a running engine. Dropping it disconnects (asynchronously).
 #[derive(Debug)]
 pub struct EngineHandle {
     tx: mpsc::Sender<EngineCommand>,
     waker: Arc<dyn Waker>,
+    finished: Finished,
 }
 
 /// Lets the UI wake the engine thread after queueing a command (the engine thread
@@ -308,8 +356,24 @@ pub trait Waker: Send + Sync + fmt::Debug {
 }
 
 impl EngineHandle {
-    pub fn new(tx: mpsc::Sender<EngineCommand>, waker: Arc<dyn Waker>) -> Self {
-        Self { tx, waker }
+    pub fn new(tx: mpsc::Sender<EngineCommand>, waker: Arc<dyn Waker>, finished: Finished) -> Self {
+        Self {
+            tx,
+            waker,
+            finished,
+        }
+    }
+
+    /// Disconnect and wait up to `timeout` for the engine thread to exit. Call this
+    /// before the process exits. Returns whether the engine finished in time.
+    pub fn shutdown(self, timeout: Duration) -> bool {
+        let finished = self.finished.clone();
+        drop(self); // sends Disconnect + abort
+        finished.wait(timeout)
+    }
+
+    pub fn is_finished(&self) -> bool {
+        self.finished.is_set()
     }
 
     /// Queue a command. Returns false if the engine has already stopped.
@@ -351,6 +415,19 @@ mod tests {
         assert_eq!(Rect::new(100, 0, 5, 5).clip(s), None);
         assert_eq!(Rect::new(0, 0, 0, 5).clip(s), None);
         assert_eq!(Rect::new(u32::MAX, 0, 5, 5).clip(s), None);
+    }
+
+    #[test]
+    fn finished_guard_sets_on_panic() {
+        let f = Finished::new();
+        let g = f.guard();
+        let r = std::thread::spawn(move || {
+            let _g = g;
+            panic!("engine died");
+        })
+        .join();
+        assert!(r.is_err());
+        assert!(f.wait(Duration::from_secs(1)));
     }
 
     #[test]

@@ -7,6 +7,8 @@
 pub mod config;
 pub mod engine;
 pub mod geometry;
+pub mod keymap;
+pub mod tiles;
 pub mod trust;
 
 pub use secrecy;
