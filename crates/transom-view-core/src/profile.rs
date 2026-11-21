@@ -281,6 +281,7 @@ impl Profile {
             audio: self.audio,
             microphone: self.microphone,
             initial: desktop_request(self.scale, LogicalSize::new(1024.0, 768.0), 1.0),
+            monitors: Vec::new(),
         }
     }
 

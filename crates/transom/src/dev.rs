@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Developer aid for headless UI checks: `TRANSOM_DEBUG_SCREENSHOT=PATH[:SECONDS]`
-//! renders the active window to a PNG after SECONDS (default 5) and quits.
+//! Developer aids for headless UI checks:
+//! - `TRANSOM_DEBUG_SCREENSHOT=PATH[:SECONDS]` renders the active window to a PNG
+//!   after SECONDS (default 5) and quits.
+//! - `TRANSOM_DEBUG_ACTIONS=win.fullscreen@8,win.send-cad@10` activates actions on the
+//!   active window after the given seconds.
 
 use std::time::Duration;
 
@@ -8,6 +11,23 @@ use adw::prelude::*;
 use gtk::{glib, graphene};
 
 pub fn install(app: &adw::Application) {
+    if let Ok(actions) = std::env::var("TRANSOM_DEBUG_ACTIONS") {
+        for item in actions.split(',') {
+            let Some((name, secs)) = item.split_once('@') else {
+                continue;
+            };
+            let Ok(secs) = secs.parse::<u64>() else {
+                continue;
+            };
+            let (app, name) = (app.clone(), name.to_string());
+            glib::timeout_add_local_once(Duration::from_secs(secs), move || {
+                eprintln!("debug action: {name}");
+                if let Some(w) = app.active_window() {
+                    let _ = w.activate_action(&name, None);
+                }
+            });
+        }
+    }
     let Ok(spec) = std::env::var("TRANSOM_DEBUG_SCREENSHOT") else {
         return;
     };

@@ -15,6 +15,8 @@
 //!   --resize-to WxH       resize the window 4 s after connecting (tests renegotiation)
 //!   --check-after-ms N    start checking N ms after connecting (default 3000)
 //!   --quit-after-ms N     disconnect cleanly and quit N ms after connecting
+//!   --multimon            one fullscreen window per monitor (multi-monitor layout);
+//!                         with --check, every monitor's window is checked
 //!   --file-clip-test      copy local test files 6 s after connecting and print
 //!                         SHA-256 of files arriving on the local clipboard
 //!   --clip-test           put test text on the local clipboard 6 s after connecting
@@ -53,6 +55,7 @@ struct Args {
     quit_after_ms: Option<u64>,
     clip_test: bool,
     file_clip_test: bool,
+    multimon: bool,
 }
 
 fn parse() -> Result<Args, String> {
@@ -80,6 +83,7 @@ fn parse() -> Result<Args, String> {
         quit_after_ms: None,
         clip_test: false,
         file_clip_test: false,
+        multimon: false,
     };
     while let Some(flag) = it.next() {
         let mut val = || it.next().ok_or(format!("{flag} needs a value"));
@@ -124,6 +128,7 @@ fn parse() -> Result<Args, String> {
             "--check-after-ms" => a.check_after_ms = val()?.parse().map_err(|_| "bad ms")?,
             "--clip-test" => a.clip_test = true,
             "--file-clip-test" => a.file_clip_test = true,
+            "--multimon" => a.multimon = true,
             "--quit-after-ms" => a.quit_after_ms = Some(val()?.parse().map_err(|_| "bad ms")?),
             "--screenshot" => a.screenshot = Some(val()?),
             other => return Err(format!("unknown flag {other}")),
@@ -158,6 +163,10 @@ fn main() -> ExitCode {
 }
 
 fn build(app: &gtk::Application, args: Args, code: Rc<Cell<u8>>) {
+    if args.multimon {
+        build_multimon(app, args, code);
+        return;
+    }
     let window = gtk::ApplicationWindow::builder()
         .application(app)
         .title(format!("{} — transom-view-demo", args.host))
@@ -235,6 +244,7 @@ fn build(app: &gtk::Application, args: Args, code: Rc<Cell<u8>>) {
         microphone: false,
         // Replaced by the view with a request computed from its size and scale.
         initial: desktop_request(args.scale_mode, Default::default(), 1.0),
+        monitors: Vec::new(),
     };
 
     let app_weak = app.downgrade();
@@ -480,6 +490,16 @@ fn install_check(
 }
 
 fn run_check(view: &TransomView, screenshot: Option<&str>) -> bool {
+    run_check_region(view, screenshot, None)
+}
+
+/// Compare a view's rendering with `region` (x, y, w, h) of the framebuffer, or all
+/// of it.
+fn run_check_region(
+    view: &TransomView,
+    screenshot: Option<&str>,
+    region: Option<(u32, u32, u32, u32)>,
+) -> bool {
     let Some(native) = view.native() else {
         return false;
     };
@@ -528,7 +548,10 @@ fn run_check(view: &TransomView, screenshot: Option<&str>) -> bool {
         .map(|p| (((p.x() as f64 + sx) * s), ((p.y() as f64 + sy) * s)))
         .unwrap_or((0.0, 0.0));
     let f = frame.lock();
-    let (fw, fh) = (f.size.width as usize, f.size.height as usize);
+    let (rx, ry, fw, fh) = match region {
+        Some((x, y, w, h)) => (x as usize, y as usize, w as usize, h as usize),
+        None => (0, 0, f.size.width as usize, f.size.height as usize),
+    };
     let vw = view.width() as f64 * s;
     let vh = view.height() as f64 * s;
     let cx = origin.0 + (vw - fw as f64) / 2.0;
@@ -546,7 +569,7 @@ fn run_check(view: &TransomView, screenshot: Option<&str>) -> bool {
                 if tx < 0 || tx as usize >= tw {
                     continue;
                 }
-                let a = &f.pixels[y * f.stride + x * 4..][..3];
+                let a = &f.pixels[(y + ry) * f.stride + (x + rx) * 4..][..3];
                 let b = &bytes[ty as usize * stride + tx as usize * 4..][..3];
                 total += 1;
                 equal += (a == b) as u64;
@@ -554,14 +577,31 @@ fn run_check(view: &TransomView, screenshot: Option<&str>) -> bool {
         }
         (total, equal)
     };
-    let mut best = (0i64, 0i64, 0u64, 0u64);
-    for oy in (cy.floor() as i64 - 3)..=(cy.ceil() as i64 + 3) {
-        for ox in (cx.floor() as i64 - 3)..=(cx.ceil() as i64 + 3) {
-            let (t, e) = sample(ox, oy, 7);
-            if t > 0 && e * best.2.max(1) > best.3 * t {
-                best = (ox, oy, t, e);
-            }
+    // Try offsets nearest the expected one first, so that ties (uniform content)
+    // resolve to the expected placement; count how many offsets tie for best.
+    let (ex, ey) = (cx.round() as i64, cy.round() as i64);
+    let mut cands: Vec<(i64, i64)> = ((ey - 3)..=(ey + 3))
+        .flat_map(|oy| ((ex - 3)..=(ex + 3)).map(move |ox| (ox, oy)))
+        .collect();
+    cands.sort_by_key(|&(ox, oy)| (ox - ex).abs() + (oy - ey).abs());
+    let mut best = (ex, ey, 0u64, 0u64);
+    let mut ties = 0;
+    for (ox, oy) in cands {
+        let (t, e) = sample(ox, oy, 7);
+        if t == 0 {
+            continue;
         }
+        if e * best.2.max(1) > best.3 * t {
+            best = (ox, oy, t, e);
+            ties = 1;
+        } else if e * best.2.max(1) == best.3 * t {
+            ties += 1;
+        }
+    }
+    if ties > 4 {
+        println!(
+            "check: note: region content is too uniform to verify alignment ({ties} offsets match equally)"
+        );
     }
     let (ox, oy) = (best.0, best.1);
     let (total, equal) = sample(ox, oy, 1);
@@ -578,7 +618,7 @@ fn run_check(view: &TransomView, screenshot: Option<&str>) -> bool {
             if tx < 0 || tx as usize >= tw {
                 continue;
             }
-            let a = &f.pixels[y * f.stride + x * 4..][..3];
+            let a = &f.pixels[(y + ry) * f.stride + (x + rx) * 4..][..3];
             let b = &bytes[ty as usize * stride + tx as usize * 4..][..3];
             let d = (0..3).map(|i| a[i].abs_diff(b[i])).max().unwrap_or(0);
             if d > 0 {
@@ -712,4 +752,138 @@ fn install_file_clip_test(view: &TransomView) {
                 .ok();
         });
     });
+}
+
+/// `--multimon`: one fullscreen window per monitor; the first monitor's view owns
+/// the session, the others follow it and show their region.
+fn build_multimon(app: &gtk::Application, args: Args, code: Rc<Cell<u8>>) {
+    use transom_view::core::monitors::{self, LocalMonitor};
+    let display = gdk::Display::default().expect("display");
+    let mons: Vec<gdk::Monitor> = (0..display.monitors().n_items())
+        .filter_map(|i| display.monitors().item(i).and_downcast::<gdk::Monitor>())
+        .collect();
+    let local: Vec<LocalMonitor> = mons
+        .iter()
+        .enumerate()
+        .map(|(i, m)| {
+            let g = m.geometry();
+            LocalMonitor {
+                x: g.x(),
+                y: g.y(),
+                width: g.width(),
+                height: g.height(),
+                scale: m.scale(),
+                primary: i == 0,
+            }
+        })
+        .collect();
+    let layout = monitors::layout(&local, args.scale_mode);
+    let (origin, size) = monitors::bounds(&layout);
+    eprintln!("monitors: {local:?}");
+    eprintln!(
+        "layout: {layout:?} -> {}x{} at {origin:?}",
+        size.width, size.height
+    );
+
+    let mut views = Vec::new();
+    for (i, (m, rm)) in mons.iter().zip(&layout).enumerate() {
+        let view = if i == 0 {
+            TransomView::new()
+        } else {
+            TransomView::new_follower(&views[0])
+        };
+        let r = rm.region(origin);
+        view.set_region(Some((r.x, r.y, r.width, r.height)));
+        let window = gtk::ApplicationWindow::builder()
+            .application(app)
+            .title(format!("monitor {i}"))
+            .build();
+        window.set_child(Some(&view));
+        window.fullscreen_on_monitor(m);
+        window.present();
+        views.push(view);
+    }
+    let leader = views[0].clone();
+    let trust = args.trust.clone();
+    leader.set_cert_handler(move |_, p| {
+        let ok = trust.as_deref() == Some(p.info.fingerprint_sha256.as_str());
+        let _ = p.reply.send(if ok {
+            CertDecision::AcceptOnce
+        } else {
+            CertDecision::Reject
+        });
+    });
+    let password = args
+        .password_file
+        .as_ref()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .map(|s| SecretString::from(s.lines().next().unwrap_or("").to_string()));
+    let config = SessionConfig {
+        host: args.host.clone(),
+        port: args.port,
+        username: Some(args.user.clone()),
+        domain: args.domain.clone(),
+        password,
+        security: SecurityMode::Negotiate,
+        cert_policy: CertPolicy::Verify,
+        scale_mode: args.scale_mode,
+        fit_mode: args.fit,
+        clipboard: transom_view::core::config::ClipboardMode::Off,
+        audio: transom_view::core::config::AudioMode::Off,
+        microphone: false,
+        initial: desktop_request(args.scale_mode, Default::default(), 1.0),
+        monitors: layout.clone(),
+    };
+    leader.connect_desktop_resized(|_, w, h| eprintln!("desktop resized: {w}x{h}"));
+    let app2 = app.clone();
+    let c = code.clone();
+    leader.connect_disconnected(move |_, r| {
+        eprintln!("disconnected: {r}");
+        if c.get() == 0 {
+            c.set(1);
+        }
+        app2.quit();
+    });
+    let engine = FreeRdpEngine::new(glib::user_cache_dir().join("transom-view-demo/freerdp"));
+    let started = Rc::new(Cell::new(false));
+    let l = leader.clone();
+    leader.add_tick_callback(move |_, _| {
+        if !started.replace(true)
+            && let Err(e) = l.connect_session(&engine, config.clone())
+        {
+            eprintln!("connect failed: {e}");
+        }
+        glib::ControlFlow::Break
+    });
+    if args.check {
+        let views = views.clone();
+        let regions: Vec<_> = layout.iter().map(|m| m.region(origin)).collect();
+        let shot = args.screenshot.clone();
+        let app = app.clone();
+        let ticks = Rc::new(Cell::new(0u32));
+        glib::timeout_add_local(Duration::from_millis(250), move || {
+            if !views[0].is_connected() {
+                return glib::ControlFlow::Continue;
+            }
+            let n = ticks.get() + 1;
+            ticks.set(n);
+            if n < 24 {
+                return glib::ControlFlow::Continue;
+            }
+            let (w, h) = views[0].desktop_size().unwrap_or_default();
+            eprintln!("remote desktop {w}x{h}");
+            let mut all = true;
+            for (i, (v, r)) in views.iter().zip(&regions).enumerate() {
+                let path = shot
+                    .as_ref()
+                    .map(|p| p.replace(".png", &format!("-m{i}.png")));
+                print!("monitor {i}: ");
+                all &= run_check_region(v, path.as_deref(), Some((r.x, r.y, r.width, r.height)));
+            }
+            code.set(if all { 0 } else { 3 });
+            views[0].shutdown(Duration::from_secs(5));
+            app.quit();
+            glib::ControlFlow::Break
+        });
+    }
 }

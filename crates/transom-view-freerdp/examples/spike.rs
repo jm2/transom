@@ -175,6 +175,7 @@ fn main() -> ExitCode {
         },
         microphone: args.mic,
         initial,
+        monitors: Vec::new(),
     };
 
     let cfg_dir = std::env::var_os("TMPDIR")

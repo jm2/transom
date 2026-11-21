@@ -20,7 +20,8 @@ use transom_view_core::engine::{
     EngineError, EngineEvent, EngineHandle, EventSink, Finished, InputEvent, MouseButton,
     PointerEvent, PointerImage, RdpEngine, Rect, SharedFrame, Waker,
 };
-use transom_view_core::geometry::{DesktopRequest, ScaleFactors, Size};
+use transom_view_core::geometry::{ScaleFactors, Size};
+use transom_view_core::monitors::{self, RemoteMonitor};
 use transom_view_core::trust::{self, CertInfo};
 
 use crate::ffi;
@@ -157,6 +158,9 @@ pub(crate) struct State {
     pub(crate) clip: crate::cliprdr::ClipState,
     /// Set after the first PostConnect; a later PreConnect means a redirection.
     connected_once: AtomicBool,
+    /// Set when the first Display Control channel connects; another one later
+    /// means FreeRDP followed a redirection.
+    disp_seen: AtomicBool,
 }
 
 impl State {
@@ -272,6 +276,7 @@ fn run(
         auth_cancelled: AtomicBool::new(false),
         clip: Default::default(),
         connected_once: AtomicBool::new(false),
+        disp_seen: AtomicBool::new(false),
     });
     // SAFETY: `session` upholds FreeRDP's lifecycle; `state` outlives the context.
     let reason = unsafe { session(&state, &rx, &waker, &config_dir) };
@@ -355,7 +360,7 @@ unsafe fn event_loop(
     waker: &FreeRdpWaker,
 ) -> DisconnectReason {
     let mut handles: [ffi::HANDLE; 64] = [ptr::null_mut(); 64];
-    let mut pending_layout: Option<DesktopRequest> = None;
+    let mut pending_layout: Option<Vec<RemoteMonitor>> = None;
     let mut last_layout: Option<Instant> = None;
     // The Display Control instance we last announced; a new one (e.g. after a
     // server redirection) must be announced again so the UI re-sends its layout.
@@ -382,7 +387,17 @@ unsafe fn event_loop(
                 Ok(EngineCommand::Disconnect) | Err(mpsc::TryRecvError::Disconnected) => {
                     return DisconnectReason::Local;
                 }
-                Ok(EngineCommand::Layout(req)) => pending_layout = Some(req),
+                Ok(EngineCommand::Layout(req)) => {
+                    pending_layout = Some(vec![RemoteMonitor {
+                        x: 0,
+                        y: 0,
+                        size: req.size,
+                        scale: req.scale,
+                        primary: true,
+                    }])
+                }
+                Ok(EngineCommand::LayoutMonitors(m)) if !m.is_empty() => pending_layout = Some(m),
+                Ok(EngineCommand::LayoutMonitors(_)) => {}
                 // SAFETY: input belongs to the live context.
                 Ok(EngineCommand::Input(ev)) => unsafe { send_input((*ctx).input, ev) },
                 // SAFETY: as above.
@@ -418,9 +433,9 @@ unsafe fn event_loop(
                 state.emit(EngineEvent::ResizeAvailable);
             }
             let due = last_layout.is_none_or(|t| t.elapsed() >= LAYOUT_MIN_INTERVAL);
-            if let (Some(req), true) = (pending_layout, due) {
+            if let (Some(layout), true) = (pending_layout.as_ref(), due) {
                 // SAFETY: `disp` is the live channel interface (cleared on disconnect).
-                unsafe { send_layout(disp, req) };
+                unsafe { send_layout(disp, layout) };
                 pending_layout = None;
                 last_layout = Some(Instant::now());
             }
@@ -538,10 +553,64 @@ unsafe fn apply_settings(
     }
     set_str(ffi::FreeRDP_ConfigPath, config_dir)?;
 
-    set_u32(ffi::FreeRDP_DesktopWidth, cfg.initial.size.width)?;
-    set_u32(ffi::FreeRDP_DesktopHeight, cfg.initial.size.height)?;
-    set_u32(ffi::FreeRDP_DesktopScaleFactor, cfg.initial.scale.desktop)?;
-    set_u32(ffi::FreeRDP_DeviceScaleFactor, cfg.initial.scale.device)?;
+    if cfg.monitors.len() > 1 {
+        let (origin, size) = monitors::bounds(&cfg.monitors);
+        let primary = cfg
+            .monitors
+            .iter()
+            .find(|m| m.primary)
+            .unwrap_or(&cfg.monitors[0]);
+        set_u32(ffi::FreeRDP_DesktopWidth, size.width)?;
+        set_u32(ffi::FreeRDP_DesktopHeight, size.height)?;
+        set_u32(ffi::FreeRDP_DesktopScaleFactor, primary.scale.desktop)?;
+        set_u32(ffi::FreeRDP_DeviceScaleFactor, primary.scale.device)?;
+        set_bool(ffi::FreeRDP_UseMultimon, true)?;
+        let n = cfg.monitors.len();
+        // SAFETY: `s` is valid; we size the array, then fill the entries FreeRDP owns.
+        unsafe {
+            if ffi::freerdp_settings_set_pointer_len(
+                s,
+                ffi::FreeRDP_MonitorDefArray,
+                ptr::null(),
+                n,
+            ) == 0
+            {
+                return Err("allocating monitor array failed".into());
+            }
+            for (i, m) in cfg.monitors.iter().enumerate() {
+                let def = ffi::freerdp_settings_get_pointer_array_writable(
+                    s,
+                    ffi::FreeRDP_MonitorDefArray,
+                    i,
+                ) as *mut ffi::rdpMonitor;
+                if def.is_null() {
+                    return Err("monitor array entry missing".into());
+                }
+                *def = ffi::rdpMonitor {
+                    x: m.x,
+                    y: m.y,
+                    width: m.size.width as i32,
+                    height: m.size.height as i32,
+                    is_primary: m.primary as u32,
+                    orig_screen: i as u32,
+                    attributes: ffi::MONITOR_ATTRIBUTES {
+                        physicalWidth: physical_mm(m.size.width, m.scale.desktop),
+                        physicalHeight: physical_mm(m.size.height, m.scale.desktop),
+                        orientation: 0,
+                        desktopScaleFactor: m.scale.desktop,
+                        deviceScaleFactor: m.scale.device,
+                    },
+                };
+            }
+        }
+        set_u32(ffi::FreeRDP_MonitorCount, n as u32)?;
+        tracing::debug!(?origin, ?size, n, "multi-monitor layout at connect");
+    } else {
+        set_u32(ffi::FreeRDP_DesktopWidth, cfg.initial.size.width)?;
+        set_u32(ffi::FreeRDP_DesktopHeight, cfg.initial.size.height)?;
+        set_u32(ffi::FreeRDP_DesktopScaleFactor, cfg.initial.scale.desktop)?;
+        set_u32(ffi::FreeRDP_DeviceScaleFactor, cfg.initial.scale.device)?;
+    }
     set_u32(ffi::FreeRDP_ColorDepth, 32)?;
 
     set_bool(ffi::FreeRDP_SoftwareGdi, true)?;
@@ -740,7 +809,7 @@ unsafe extern "C" fn on_channel_connected(
         let name = CStr::from_ptr((*e).name);
         tracing::debug!(channel = %name.to_string_lossy(), "channel connected");
         if name.to_bytes_with_nul() == ffi::DISP_DVC_CHANNEL_NAME {
-            if state.connected_once.load(Ordering::SeqCst) {
+            if state.disp_seen.swap(true, Ordering::SeqCst) {
                 // FreeRDP follows Server Redirection PDUs internally; a second Display
                 // Control channel is how we notice (e.g. grd remote login handover).
                 let target = cstr_lossy(ffi::freerdp_settings_get_string(
@@ -797,33 +866,41 @@ unsafe extern "C" fn disp_caps(
     0 // CHANNEL_RC_OK
 }
 
+/// Physical size in mm for a monitor of `px` device pixels at `desktop_scale`
+/// percent, as if its logical size were at 96 DPI. MS-RDPEDISP accepts
+/// 10–10000 mm; Windows derives DPI from the scale factors, not from these.
+fn physical_mm(px: u32, desktop_scale: u32) -> u32 {
+    let logical = px as f64 * 100.0 / desktop_scale.max(100) as f64;
+    ((logical / 96.0 * 25.4).round() as u32).clamp(10, 10000)
+}
+
 /// # Safety
 /// `disp` must be the live display-control interface.
-unsafe fn send_layout(disp: *mut ffi::DispClientContext, req: DesktopRequest) {
-    let (w, h) = (req.size.width, req.size.height);
-    // Physical size in mm as if the logical size were at 96 DPI; MS-RDPEDISP accepts
-    // 10–10000 mm. Windows derives DPI from the scale factors, not from these.
-    let mm = |px: u32| {
-        let logical = px as f64 * 100.0 / req.scale.desktop as f64;
-        ((logical / 96.0 * 25.4).round() as u32).clamp(10, 10000)
-    };
-    let mut layout = ffi::DISPLAY_CONTROL_MONITOR_LAYOUT {
-        Flags: ffi::DISPLAY_CONTROL_MONITOR_PRIMARY,
-        Left: 0,
-        Top: 0,
-        Width: w,
-        Height: h,
-        PhysicalWidth: mm(w),
-        PhysicalHeight: mm(h),
-        Orientation: 0,
-        DesktopScaleFactor: req.scale.desktop,
-        DeviceScaleFactor: req.scale.device,
-    };
-    // SAFETY: per the contract; `layout` outlives the call.
+unsafe fn send_layout(disp: *mut ffi::DispClientContext, layout: &[RemoteMonitor]) {
+    let mut defs: Vec<ffi::DISPLAY_CONTROL_MONITOR_LAYOUT> = layout
+        .iter()
+        .map(|m| ffi::DISPLAY_CONTROL_MONITOR_LAYOUT {
+            Flags: if m.primary {
+                ffi::DISPLAY_CONTROL_MONITOR_PRIMARY
+            } else {
+                0
+            },
+            Left: m.x,
+            Top: m.y,
+            Width: m.size.width,
+            Height: m.size.height,
+            PhysicalWidth: physical_mm(m.size.width, m.scale.desktop),
+            PhysicalHeight: physical_mm(m.size.height, m.scale.desktop),
+            Orientation: 0,
+            DesktopScaleFactor: m.scale.desktop,
+            DeviceScaleFactor: m.scale.device,
+        })
+        .collect();
+    // SAFETY: per the contract; `defs` outlives the call.
     unsafe {
         if let Some(send) = (*disp).SendMonitorLayout {
-            let rc = send(disp, 1, &mut layout);
-            tracing::debug!(?req, rc, "sent monitor layout");
+            let rc = send(disp, defs.len() as u32, defs.as_mut_ptr());
+            tracing::debug!(?layout, rc, "sent monitor layout");
         }
     }
 }

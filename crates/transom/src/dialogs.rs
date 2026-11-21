@@ -267,6 +267,12 @@ pub fn profile_editor(
         .build();
     display.add(&scale);
     display.add(&fit);
+    let multimon = adw::SwitchRow::builder()
+        .title("Use All Monitors in Fullscreen")
+        .subtitle("Each monitor shows its part of one remote desktop, at its own scale")
+        .active(profile.multimon)
+        .build();
+    display.add(&multimon);
     page.add(&display);
 
     let devices = adw::PreferencesGroup::builder().title("Sharing").build();
@@ -347,6 +353,7 @@ pub fn profile_editor(
             p.username = opt(&user);
             p.domain = opt(&domain);
             p.scale = SCALE_CHOICES[scale.selected() as usize % SCALE_CHOICES.len()].1;
+            p.multimon = multimon.is_active();
             p.fit = if fit.is_active() {
                 FitMode::Fit
             } else {

@@ -330,10 +330,19 @@ impl MainWindow {
             "fullscreen",
             Box::new(|w| {
                 if w.window.is_fullscreen() {
+                    if let Some(s) = w.active_session() {
+                        s.exit_multimon();
+                    }
                     w.window.unfullscreen();
                 } else if w.tab_view.n_pages() > 0 {
                     w.stack.set_visible_child_name("sessions");
-                    w.window.fullscreen();
+                    // "Use all monitors": follower windows on the other monitors.
+                    let multi = w.active_session().is_some_and(|s| {
+                        s.profile.borrow().multimon && s.enter_multimon(w.window.upcast_ref())
+                    });
+                    if !multi {
+                        w.window.fullscreen();
+                    }
                 }
             }),
         );
@@ -362,6 +371,12 @@ impl MainWindow {
         self.window.connect_fullscreened_notify(move |win| {
             let Some(w) = weak.upgrade() else { return };
             let fs = win.is_fullscreen();
+            if !fs
+                && let Some(s) = w.active_session()
+                && s.in_multimon()
+            {
+                s.exit_multimon();
+            }
             w.toolbar.set_reveal_top_bars(!fs);
             w.update_inhibit();
         });

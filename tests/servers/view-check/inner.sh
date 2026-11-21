@@ -16,12 +16,19 @@ shift
 # Fractional scales need framebuffer scaling.
 gsettings set org.gnome.mutter experimental-features "['scale-monitor-framebuffer']" 2>/dev/null || true  # pre-GNOME 51
 mutter --headless --wayland --no-x11 --wayland-display=wayland-0 \
-    --virtual-monitor "$MONITOR" >/tmp/mutter.log 2>&1 &
+    --virtual-monitor "$MONITOR" ${MONITOR2:+--virtual-monitor "$MONITOR2"} >/tmp/mutter.log 2>&1 &
 for _ in $(seq 50); do [[ -S $XDG_RUNTIME_DIR/wayland-0 ]] && break; sleep 0.1; done
 sleep 1
 connector=$(gdctl show 2>/dev/null | sed -n 's/.*Monitor \([^ ]*\).*/\1/p' | head -1)
+if [[ -n "${MONITOR2:-}" ]]; then
+    connector2=$(gdctl show 2>/dev/null | sed -n 's/.*Monitor \([^ ]*\).*/\1/p' | sed -n 2p)
+    gdctl set --logical-monitor --primary --monitor "$connector" --scale "$SCALE" \
+        --logical-monitor --monitor "$connector2" --scale "${SCALE2_STATIC:-1}" --right-of "$connector" \
+        || { echo "gdctl could not set two monitors:"; gdctl show; exit 4; }
+else
 gdctl set --logical-monitor --primary --monitor "$connector" --scale "$SCALE" >/dev/null 2>&1 \
     || { echo "gdctl could not set scale $SCALE on $MONITOR:"; gdctl show; exit 4; }
+fi
 sleep 1
 echo "monitor $connector $MONITOR, requested scale $SCALE"
 if [[ -n "${SCALE2:-}" ]]; then

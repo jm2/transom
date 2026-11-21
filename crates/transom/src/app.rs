@@ -158,7 +158,10 @@ thread_local! {
 pub fn run() -> glib::ExitCode {
     let app = adw::Application::builder()
         .application_id(APP_ID)
-        .flags(gio::ApplicationFlags::HANDLES_OPEN)
+        // Command line, not HANDLES_OPEN: GIO's GFile parsing mangles Microsoft-style
+        // links (rdp://full%20address=s:host:port&… becomes rdp://full%20address=s:0/),
+        // so rdp:// arguments must be read raw.
+        .flags(gio::ApplicationFlags::HANDLES_COMMAND_LINE)
         .build();
     app.add_main_option(
         "password-file",
@@ -198,32 +201,48 @@ pub fn run() -> glib::ExitCode {
         active_window(app, &s).window.present();
     });
     let st = state.clone();
-    app.connect_open(move |app, files, _hint| {
-        let Some(s) = st.borrow().clone() else { return };
+    app.connect_command_line(move |app, cmd| {
+        let Some(s) = st.borrow().clone() else {
+            return glib::ExitCode::FAILURE;
+        };
+        let mut targets = Vec::new();
+        let mut args = cmd.arguments().into_iter().skip(1);
+        while let Some(a) = args.next() {
+            let a = a.to_string_lossy().into_owned();
+            if a == "--password-file" {
+                args.next(); // consumed by handle-local-options
+                continue;
+            }
+            if a.starts_with("--password-file=") || a == "--" {
+                continue;
+            }
+            targets.push(a);
+        }
         let w = active_window(app, &s);
         w.window.present();
-        for file in files {
-            let uri = file.uri().to_string();
-            if uri.to_ascii_lowercase().starts_with("rdp://") {
+        for t in targets {
+            if t.to_ascii_lowercase().starts_with("rdp://") {
                 let password = CLI_PASSWORD.with(|c| c.borrow_mut().take());
-                match transom_view::core::rdpfile::RdpFile::from_uri(&uri)
+                match transom_view::core::rdpfile::RdpFile::from_uri(&t)
                     .ok()
                     .and_then(|f| transom_view::core::profile::Profile::from_rdp(&f))
                 {
                     Some(p) => w.open_session(p, true, password),
-                    None => w.toast(&format!("Invalid link: {uri}")),
+                    None => w.toast(&format!("Invalid link: {t}")),
                 }
             } else {
+                let file = cmd.create_file_for_arg(&t);
                 let name = file
                     .basename()
                     .map(|b| b.to_string_lossy().into_owned())
-                    .unwrap_or_default();
+                    .unwrap_or(t.clone());
                 match file.load_contents(gio::Cancellable::NONE) {
                     Ok((bytes, _)) => w.open_rdp_bytes(&bytes, &name),
                     Err(e) => w.toast(&format!("Couldn't open {name}: {e}")),
                 }
             }
         }
+        glib::ExitCode::SUCCESS
     });
     let st = state.clone();
     app.connect_shutdown(move |_| {

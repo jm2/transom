@@ -84,6 +84,9 @@ pub struct SessionConfig {
     pub microphone: bool,
     /// Initial desktop request, computed from the widget size by the caller.
     pub initial: DesktopRequest,
+    /// Multi-monitor layout (see `monitors::layout`). Empty or one entry: a single
+    /// monitor described by `initial`.
+    pub monitors: Vec<crate::monitors::RemoteMonitor>,
 }
 
 impl SessionConfig {

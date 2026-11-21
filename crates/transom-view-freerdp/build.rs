@@ -56,6 +56,7 @@ fn main() {
         .allowlist_type("CLIPRDR_.*")
         .allowlist_type("RdpgfxClientContext")
         .allowlist_type("DISPLAY_CONTROL_MONITOR_LAYOUT")
+        .allowlist_type("rdpMonitor")
         .allowlist_type("ChannelConnectedEventArgs")
         .allowlist_type("ChannelDisconnectedEventArgs")
         .allowlist_type("FreeRDP_Settings_Keys_.*")

@@ -192,6 +192,7 @@ fn main() -> ExitCode {
         audio: transom_view_core::config::AudioMode::Off,
         microphone: false,
         initial: desktop_request(ScaleMode::MatchLocal, LogicalSize::new(1024.0, 768.0), 1.0),
+        monitors: Vec::new(),
     };
     let dir = std::env::temp_dir().join("transom-inputtest-freerdp");
     let (tx, rx) = mpsc::channel();

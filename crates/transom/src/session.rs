@@ -29,6 +29,8 @@ pub struct Session {
     pending_remember: RefCell<Option<SecretString>>,
     auth_failures: Cell<u32>,
     skip_saved_password: Cell<bool>,
+    /// Fullscreen windows on the other monitors (multi-monitor mode).
+    followers: RefCell<Vec<gtk::Window>>,
 }
 
 impl std::fmt::Debug for Session {
@@ -63,6 +65,7 @@ impl Session {
             pending_remember: RefCell::new(None),
             auth_failures: Cell::new(0),
             skip_saved_password: Cell::new(false),
+            followers: RefCell::new(Vec::new()),
         });
         session.wire();
         session
@@ -306,7 +309,85 @@ impl Session {
     /// Close for good (tab closed).
     pub fn close(&self) {
         self.closing.set(true);
+        self.exit_multimon();
         self.drain();
+    }
+
+    /// Multi-monitor fullscreen: span every monitor. `main` is the window holding
+    /// this session; it goes fullscreen on its own monitor and the other monitors
+    /// get follower windows. Returns false if there's only one monitor.
+    pub fn enter_multimon(&self, main: &gtk::Window) -> bool {
+        use transom_view::core::monitors::{self, LocalMonitor};
+        let display = WidgetExt::display(main);
+        let mons: Vec<gtk::gdk::Monitor> = (0..display.monitors().n_items())
+            .filter_map(|i| {
+                display
+                    .monitors()
+                    .item(i)
+                    .and_downcast::<gtk::gdk::Monitor>()
+            })
+            .collect();
+        if mons.len() < 2 {
+            return false;
+        }
+        let here = main.surface().and_then(|s| display.monitor_at_surface(&s));
+        let lead = here
+            .as_ref()
+            .and_then(|h| mons.iter().position(|m| m == h))
+            .unwrap_or(0);
+        let local: Vec<LocalMonitor> = mons
+            .iter()
+            .enumerate()
+            .map(|(i, m)| {
+                let g = m.geometry();
+                LocalMonitor {
+                    x: g.x(),
+                    y: g.y(),
+                    width: g.width(),
+                    height: g.height(),
+                    scale: m.scale(),
+                    primary: i == lead,
+                }
+            })
+            .collect();
+        let layout = monitors::layout(&local, self.profile.borrow().scale);
+        let (origin, _) = monitors::bounds(&layout);
+        let mut followers = Vec::new();
+        for (i, (m, rm)) in mons.iter().zip(&layout).enumerate() {
+            let r = rm.region(origin);
+            let region = Some((r.x, r.y, r.width, r.height));
+            if i == lead {
+                self.view.set_region(region);
+                main.fullscreen_on_monitor(m);
+                continue;
+            }
+            let view = TransomView::new_follower(&self.view);
+            view.set_region(region);
+            let w = gtk::Window::builder()
+                .title(self.profile.borrow().display_name())
+                .child(&view)
+                .build();
+            w.fullscreen_on_monitor(m);
+            w.present();
+            followers.push(w);
+        }
+        *self.followers.borrow_mut() = followers;
+        tracing::info!(monitors = layout.len(), ?layout, "multi-monitor fullscreen");
+        self.view.set_monitor_layout(Some(layout));
+        true
+    }
+
+    /// Leave multi-monitor mode: close the follower windows, back to one monitor.
+    pub fn exit_multimon(&self) {
+        for w in self.followers.borrow_mut().drain(..) {
+            w.destroy();
+        }
+        self.view.set_region(None);
+        self.view.set_monitor_layout(None);
+    }
+
+    pub fn in_multimon(&self) -> bool {
+        !self.followers.borrow().is_empty()
     }
 
     pub fn send_ctrl_alt_del(&self) {

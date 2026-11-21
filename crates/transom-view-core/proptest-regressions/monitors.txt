@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 935e42f1aa166ed456f1bb7e2363f60f4a434369e5b568ac9536354b5a64bdb2 # shrinks to local = [LocalMonitor { x: 0, y: 263, width: 640, height: 480, scale: 1.0, primary: true }, LocalMonitor { x: 640, y: -282, width: 2315, height: 545, scale: 1.25, primary: false }]

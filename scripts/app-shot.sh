@@ -16,6 +16,8 @@ fp=$(podman logs transom-grd 2>/dev/null | sed -n 's/^TLS fingerprint: //p' | ta
 while [[ $# -gt 0 && $1 != "--" ]]; do
     case $1 in
         --seed-trust) printf '[hosts]\n"localhost:13389" = "%s"\n' "$fp" > "$CFG/transom/known-hosts.toml" ;;
+        --seed-multimon)
+            printf 'name = "Multi"\nhost = "localhost"\nport = 13389\nusername = "transom"\nmultimon = true\n' > "$CFG/transom/profiles/multi.toml" ;;
         --seed-profile)
             for n in "GNOME Test Server:localhost:13389:transom" "Office Desktop:pc.corp.example:3389:jm" "Lab Windows 11:192.168.50.20:3389:admin"; do
                 IFS=: read -r name host port user <<<"$n"
@@ -29,6 +31,8 @@ done
 cargo build -q -p transom
 podman run --rm --network host --userns=keep-id \
     -e SCALE="$SCALE" -e MONITOR="${MONITOR:-2560x1600}" -e BIN=/demo/transom \
+    -e MONITOR2="${MONITOR2:-}" -e SCALE2_STATIC="${SCALE2_STATIC:-}" \
+    -e TRANSOM_DEBUG_ACTIONS="${TRANSOM_DEBUG_ACTIONS:-}" -e RUST_LOG="${RUST_LOG:-}" \
     -e XDG_CONFIG_HOME=/state/app-config-"$NAME" -e XDG_CACHE_HOME=/tmp/cache \
     -e TRANSOM_DEBUG_SCREENSHOT="/state/app-$NAME.png:$SECS" \
     -v "$PWD/target/debug:/demo:ro,Z" \

@@ -36,6 +36,21 @@ impl Rect {
         }
     }
 
+    /// The overlap of two rectangles, if any.
+    pub fn intersect(self, other: Rect) -> Option<Rect> {
+        let x0 = self.x.max(other.x);
+        let y0 = self.y.max(other.y);
+        let x1 = self
+            .x
+            .saturating_add(self.width)
+            .min(other.x.saturating_add(other.width));
+        let y1 = self
+            .y
+            .saturating_add(self.height)
+            .min(other.y.saturating_add(other.height));
+        (x0 < x1 && y0 < y1).then(|| Rect::new(x0, y0, x1 - x0, y1 - y0))
+    }
+
     /// Clip to a framebuffer of `size`; `None` if nothing remains.
     pub fn clip(self, size: Size) -> Option<Rect> {
         let x2 = self.x.saturating_add(self.width).min(size.width);
@@ -298,8 +313,10 @@ pub enum InputEvent {
 /// Commands from the UI to the engine.
 #[derive(Debug, Clone)]
 pub enum EngineCommand {
-    /// Display Control monitor layout (single monitor for now).
+    /// Display Control monitor layout, single monitor.
     Layout(DesktopRequest),
+    /// Display Control monitor layout, several monitors (see `monitors::layout`).
+    LayoutMonitors(Vec<crate::monitors::RemoteMonitor>),
     Input(InputEvent),
     /// Send the secure attention sequence.
     CtrlAltDel,
@@ -452,6 +469,16 @@ pub trait RdpEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rect_intersect() {
+        let a = Rect::new(0, 0, 10, 10);
+        assert_eq!(
+            a.intersect(Rect::new(5, 5, 10, 10)),
+            Some(Rect::new(5, 5, 5, 5))
+        );
+        assert_eq!(a.intersect(Rect::new(10, 0, 5, 5)), None);
+    }
 
     #[test]
     fn rect_clip() {

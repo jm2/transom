@@ -188,7 +188,8 @@ Each phase ends with its Definition of Done (DoD) demonstrated and logged in §1
       `scripts/clipboard-check.sh`).
 - [x] Audio out (rdpsnd) and in (audin) via PipeWire (`scripts/audio-check.sh`).
 - [x] grd remote-login **server redirection** end to end (`scripts/login-check.sh`, systemd+GDM container).
-- [ ] Multi-monitor (span selected monitors, per-monitor scale in the layout PDU).
+- [x] Multi-monitor (span selected monitors, per-monitor scale in the layout PDU): one fullscreen
+      view per monitor sharing one session (`scripts/multimon-check.sh`, 200% + 100%).
 - **DoD:** grd remote login via GDM → user session works without a second prompt; file copy
   works in both directions with Windows.
 

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The `TransomView` widget.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 use std::time::Duration;
 
@@ -11,13 +11,14 @@ use gtk::{gdk, glib, graphene};
 use transom_view_core::config::SessionConfig;
 use transom_view_core::engine::{
     AuthRequest, CertPrompt, EngineCommand, EngineError, EngineEvent, EngineHandle, Finished,
-    InputEvent, MouseButton, PointerEvent, RdpEngine, SharedFrame,
+    InputEvent, MouseButton, PointerEvent, RdpEngine, Rect, SharedFrame,
 };
 use transom_view_core::geometry::{
     self, DesktopRequest, FitMode, LayoutTracker, LogicalSize, Point, ScaleMode, Size, Viewport,
     WheelAccumulator,
 };
 use transom_view_core::keymap::{self, Scancode};
+use transom_view_core::monitors::RemoteMonitor;
 
 use crate::tiles::TileCache;
 
@@ -54,6 +55,13 @@ mod imp {
         pub(super) auth_handler: RefCell<Option<AuthHandler>>,
         pub(super) clipboard: crate::clipboard::ClipboardBridge,
         pub(super) cert_handler: RefCell<Option<CertHandler>>,
+        /// The part of the remote desktop this view shows (multi-monitor); `None`
+        /// shows all of it.
+        pub(super) region: Cell<Option<Rect>>,
+        /// For a follower view: the view that owns the session.
+        pub(super) leader: glib::WeakRef<super::TransomView>,
+        /// For a leader: views showing other regions of the same session.
+        pub(super) followers: RefCell<Vec<glib::WeakRef<super::TransomView>>>,
     }
 
     #[derive(Default)]
@@ -74,6 +82,10 @@ mod imp {
         pub pressed_buttons: HashSet<u32>,
         pub pointer: Point,
         pub scale_watch: Option<(gdk::Surface, glib::SignalHandlerId)>,
+        /// Multi-monitor layout chosen by the application (overrides the
+        /// widget-size-based single-monitor layout), and the last one sent.
+        pub monitors: Option<Vec<RemoteMonitor>>,
+        pub last_monitors: Option<Vec<RemoteMonitor>>,
     }
 
     #[glib::object_subclass]
@@ -158,14 +170,21 @@ mod imp {
             let bounds = graphene::Rect::new(0.0, 0.0, obj.width() as f32, obj.height() as f32);
             snapshot.append_color(&gdk::RGBA::BLACK, &bounds);
 
-            let mut inner = self.inner.borrow_mut();
+            // A follower draws its region from the leader's frame and tiles.
+            let src = self.source();
+            let mut inner = src.imp().inner.borrow_mut();
             let Some(frame) = inner.frame.clone() else {
                 return;
             };
-            let desktop = {
+            let full = {
                 let f = frame.lock();
                 inner.tiles.refresh(&f);
                 f.size
+            };
+            let region = self.region.get().and_then(|r| r.clip(full));
+            let (desktop, origin) = match region {
+                Some(r) => (Size::new(r.width, r.height), (r.x as f64, r.y as f64)),
+                None => (full, (0.0, 0.0)),
             };
             let fit = inner.fit_mode;
             let g = self.geometry(desktop, fit);
@@ -179,13 +198,19 @@ mod imp {
             snapshot.translate(&graphene::Point::new(g.snap.0 as f32, g.snap.1 as f32));
             snapshot.scale((1.0 / g.scale) as f32, (1.0 / g.scale) as f32);
             for (r, tex) in inner.tiles.iter() {
+                if let Some(reg) = region
+                    && reg.intersect(r).is_none()
+                {
+                    continue;
+                }
+                let (rx, ry) = (r.x as f64 - origin.0, r.y as f64 - origin.1);
                 // Round both edges to whole device pixels: neighbouring tiles then
                 // share exact edges, so nothing is antialiased into a seam. (At
                 // ratio 1 these are already integers.)
-                let x0 = (vp.offset_x + r.x as f64 * vp.ratio).round();
-                let y0 = (vp.offset_y + r.y as f64 * vp.ratio).round();
-                let x1 = (vp.offset_x + (r.x + r.width) as f64 * vp.ratio).round();
-                let y1 = (vp.offset_y + (r.y + r.height) as f64 * vp.ratio).round();
+                let x0 = (vp.offset_x + rx * vp.ratio).round();
+                let y0 = (vp.offset_y + ry * vp.ratio).round();
+                let x1 = (vp.offset_x + (rx + r.width as f64) * vp.ratio).round();
+                let y1 = (vp.offset_y + (ry + r.height as f64) * vp.ratio).round();
                 let rect =
                     graphene::Rect::new(x0 as f32, y0 as f32, (x1 - x0) as f32, (y1 - y0) as f32);
                 if exact {
@@ -271,34 +296,68 @@ mod imp {
             }
         }
 
+        /// The view that owns the session: the leader for a follower, else self.
+        pub(super) fn source(&self) -> super::TransomView {
+            self.leader.upgrade().unwrap_or_else(|| self.obj().clone())
+        }
+
+        /// This view's region of a desktop of `full` size: `(origin, size)`.
+        fn region_of(&self, full: Size) -> ((u32, u32), Size) {
+            match self.region.get().and_then(|r| r.clip(full)) {
+                Some(r) => ((r.x, r.y), Size::new(r.width, r.height)),
+                None => ((0, 0), full),
+            }
+        }
+
         fn current_geometry(&self) -> Option<Geometry> {
-            let inner = self.inner.borrow();
+            let src = self.source();
+            let inner = src.imp().inner.borrow();
             inner.frame.as_ref()?;
-            let (desktop, fit) = (inner.desktop, inner.fit_mode);
+            let (full, fit) = (inner.desktop, inner.fit_mode);
             drop(inner);
+            let (_, desktop) = self.region_of(full);
             Some(self.geometry(desktop, fit))
         }
 
         fn to_remote(&self, x: f64, y: f64) -> Option<(Point, bool)> {
             let g = self.current_geometry()?;
-            Some(geometry::map_input(
-                x - g.snap.0,
-                y - g.snap.1,
-                g.scale,
-                &g.viewport,
-                g.desktop,
+            let full = self.source().imp().inner.borrow().desktop;
+            let (origin, _) = self.region_of(full);
+            let (p, inside) =
+                geometry::map_input(x - g.snap.0, y - g.snap.1, g.scale, &g.viewport, g.desktop);
+            Some((
+                Point {
+                    x: p.x + origin.0,
+                    y: p.y + origin.1,
+                },
+                inside,
             ))
         }
 
         pub(super) fn send(&self, cmd: EngineCommand) {
-            if let Some(h) = &self.inner.borrow().handle {
+            if let Some(leader) = self.leader.upgrade() {
+                leader.imp().send(cmd);
+            } else if let Some(h) = &self.inner.borrow().handle {
                 h.send(cmd);
             }
         }
 
         fn connected(&self) -> bool {
-            let inner = self.inner.borrow();
+            let src = self.source();
+            let inner = src.imp().inner.borrow();
             inner.handle.is_some() && inner.frame.is_some()
+        }
+
+        /// Run `f` on every live follower.
+        fn each_follower(&self, f: impl Fn(&super::TransomView)) {
+            self.followers
+                .borrow_mut()
+                .retain(|w| w.upgrade().is_some());
+            for w in self.followers.borrow().iter() {
+                if let Some(v) = w.upgrade() {
+                    f(&v);
+                }
+            }
         }
 
         // ---- resize / scale ----------------------------------------------------
@@ -327,6 +386,18 @@ mod imp {
         }
 
         fn send_layout(&self) {
+            // Multi-monitor: the application's layout, not this widget's size.
+            let monitors = self.inner.borrow().monitors.clone();
+            if let Some(m) = monitors {
+                let mut inner = self.inner.borrow_mut();
+                if inner.last_monitors.as_ref() != Some(&m) {
+                    inner.last_monitors = Some(m.clone());
+                    drop(inner);
+                    tracing::debug!(?m, "requesting multi-monitor layout");
+                    self.send(EngineCommand::LayoutMonitors(m));
+                }
+                return;
+            }
             let mode = self.inner.borrow().scale_mode;
             let req = self.desktop_request(mode);
             let changed = self.inner.borrow_mut().layout.update(req);
@@ -349,18 +420,24 @@ mod imp {
                         inner.tiles.clear();
                     }
                     obj.queue_draw();
+                    self.each_follower(|v| v.queue_draw());
                     obj.emit_by_name::<()>("connected", &[]);
                 }
                 EngineEvent::FrameUpdate { damage } => {
                     self.inner.borrow_mut().tiles.mark(&damage);
                     obj.queue_draw();
+                    self.each_follower(|v| v.queue_draw());
                 }
                 EngineEvent::DesktopResized(size) => {
                     self.inner.borrow_mut().desktop = size;
                     obj.queue_draw();
+                    self.each_follower(|v| v.queue_draw());
                     obj.emit_by_name::<()>("desktop-resized", &[&size.width, &size.height]);
                 }
-                EngineEvent::Pointer(p) => self.set_remote_cursor(p),
+                EngineEvent::Pointer(p) => {
+                    self.each_follower(|v| v.imp().set_remote_cursor(p.clone()));
+                    self.set_remote_cursor(p);
+                }
                 EngineEvent::PointerPosition { .. } => {}
                 EngineEvent::AuthRequired(req) => {
                     if let Some(h) = self.auth_handler.borrow().as_ref() {
@@ -384,6 +461,7 @@ mod imp {
                     // A new Display Control channel (first connect or after a
                     // redirection) knows nothing of our layout: send it again.
                     inner.layout.reset();
+                    inner.last_monitors = None;
                     drop(inner);
                     self.schedule_layout();
                 }
@@ -404,6 +482,10 @@ mod imp {
                     self.reset_session();
                     obj.set_cursor(None);
                     obj.queue_draw();
+                    self.each_follower(|v| {
+                        v.set_cursor(None);
+                        v.queue_draw();
+                    });
                     obj.emit_by_name::<()>("disconnected", &[&reason.to_string()]);
                 }
             }
@@ -767,6 +849,7 @@ impl TransomView {
         let (scale_mode, fit_mode, clip_mode) =
             (config.scale_mode, config.fit_mode, config.clipboard);
 
+        let monitors = (config.monitors.len() > 1).then(|| config.monitors.clone());
         let (tx, rx) = async_channel::unbounded();
         let handle = engine.connect(
             config,
@@ -783,6 +866,8 @@ impl TransomView {
             inner.fit_mode = fit_mode;
             inner.layout.reset();
             inner.layout.update(initial);
+            inner.last_monitors = monitors.clone();
+            inner.monitors = monitors;
             inner.session
         };
 
@@ -860,7 +945,40 @@ impl TransomView {
 
     /// The shared remote framebuffer, once connected (for screenshots and tests).
     pub fn frame(&self) -> Option<SharedFrame> {
-        self.imp().inner.borrow().frame.clone()
+        self.imp().source().imp().inner.borrow().frame.clone()
+    }
+
+    /// A view that shows another region of `leader`'s session (one per monitor in
+    /// multi-monitor fullscreen). It has no session of its own; input goes to the
+    /// leader's session and it draws from the leader's frame.
+    pub fn new_follower(leader: &TransomView) -> Self {
+        let v = Self::new();
+        v.imp().leader.set(Some(leader));
+        leader.imp().followers.borrow_mut().push(v.downgrade());
+        v
+    }
+
+    /// Show only `(x, y, width, height)` of the remote desktop (remote pixels), or
+    /// all of it with `None`.
+    pub fn set_region(&self, region: Option<(u32, u32, u32, u32)>) {
+        self.imp()
+            .region
+            .set(region.map(|(x, y, w, h)| Rect::new(x, y, w, h)));
+        self.queue_draw();
+    }
+
+    /// Multi-monitor: request this layout from the server (instead of one monitor
+    /// sized to this widget). `None` returns to single-monitor behaviour.
+    pub fn set_monitor_layout(&self, monitors: Option<Vec<RemoteMonitor>>) {
+        let imp = self.imp();
+        {
+            let mut inner = imp.inner.borrow_mut();
+            inner.monitors = monitors.filter(|m| m.len() > 1);
+            // Whatever we sent before no longer describes the server's layout.
+            inner.last_monitors = None;
+            inner.layout.reset();
+        }
+        imp.schedule_layout();
     }
 
     /// Drop all cached tile textures; they're rebuilt from the framebuffer on the
