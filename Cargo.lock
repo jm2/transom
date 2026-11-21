@@ -1399,6 +1399,7 @@ version = "0.0.1"
 dependencies = [
  "async-channel",
  "gtk4",
+ "sha2",
  "tracing",
  "tracing-subscriber",
  "transom-view-core",

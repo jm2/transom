@@ -9,13 +9,27 @@ import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
-from gi.repository import Gdk, GLib, Gtk  # noqa: E402
+from gi.repository import Gdk, Gio, GLib, Gtk  # noqa: E402
 
 LOG = open(sys.argv[1] if len(sys.argv) > 1 else "/tmp/input-probe.log", "a", buffering=1)
 
 
 def log(**kw):
     LOG.write(json.dumps(kw) + "\n")
+
+
+def hash_tree(paths):
+    """{relative name: sha256} for every regular file under the given paths."""
+    import hashlib, os
+    out = {}
+    for p in paths:
+        base = os.path.dirname(p.rstrip("/"))
+        for root, _dirs, files in os.walk(p) if os.path.isdir(p) else [(base, [], [os.path.basename(p)])]:
+            for f in files:
+                full = os.path.join(root, f)
+                with open(full, "rb") as fh:
+                    out[os.path.relpath(full, base)] = hashlib.sha256(fh.read()).hexdigest()
+    return out
 
 
 def on_activate(app):
@@ -93,6 +107,31 @@ def on_activate(app):
                 bmp = b"BM" + struct.pack("<IHHI", 14 + len(info) + len(pixels), 0, 0, 14 + len(info)) + info + pixels
                 clipboard.set_content(Gdk.ContentProvider.new_for_bytes("image/bmp", GLib.Bytes.new(bmp)))
                 log(t="copied-image", w=w, h=h)
+            elif line == "copy-files":
+                import hashlib, os
+                os.makedirs("/tmp/clip-src/folder", exist_ok=True)
+                with open("/tmp/clip-src/one.txt", "w") as f:
+                    f.write("remote file one\n")
+                with open("/tmp/clip-src/folder/blob.bin", "wb") as f:
+                    f.write(os.urandom(3 * 1024 * 1024 + 17))
+                uris = ["file:///tmp/clip-src/one.txt", "file:///tmp/clip-src/folder"]
+                provider = Gdk.ContentProvider.new_union([
+                    Gdk.ContentProvider.new_for_bytes("text/uri-list", GLib.Bytes.new("".join(u + "\r\n" for u in uris).encode())),
+                    Gdk.ContentProvider.new_for_bytes("x-special/gnome-copied-files", GLib.Bytes.new(("copy\n" + "\n".join(uris)).encode())),
+                ])
+                clipboard.set_content(provider)
+                log(t="copied-files", sha=hash_tree(["/tmp/clip-src/one.txt", "/tmp/clip-src/folder"]))
+            elif line == "paste-files":
+                def on_files(cb, res):
+                    try:
+                        stream, _ = cb.read_finish(res)
+                        data = stream.read_bytes(1 << 20, None).get_data().decode()
+                        paths = [Gio.File.new_for_uri(u.strip()).get_path() for u in data.splitlines() if u.strip() and not u.startswith("#")]
+                        log(t="pasted-files", paths=paths, sha=hash_tree(paths))
+                    except Exception as e:  # noqa: BLE001
+                        log(t="pasted-files", error=str(e))
+
+                clipboard.read_async(["text/uri-list"], 0, None, on_files)
             elif line == "formats":
                 log(t="formats", formats=clipboard.get_formats().to_string())
             elif line == "paste-image":

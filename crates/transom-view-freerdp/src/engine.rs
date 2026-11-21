@@ -396,6 +396,14 @@ unsafe fn event_loop(
                 Ok(EngineCommand::ClipboardReply { format, data }) => {
                     crate::cliprdr::reply(state, format, data)
                 }
+                Ok(EngineCommand::ClipboardFileRequest {
+                    stream_id,
+                    index,
+                    range,
+                }) => crate::cliprdr::file_request(state, stream_id, index, range),
+                Ok(EngineCommand::ClipboardFileReply { stream_id, data }) => {
+                    crate::cliprdr::file_reply(state, stream_id, data)
+                }
                 Err(mpsc::TryRecvError::Empty) => break,
             }
         }

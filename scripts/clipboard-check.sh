@@ -89,4 +89,61 @@ grep -q 'LOCAL CLIPBOARD IMAGE: 64x48' "$STATE/widget-clip.log" \
 # grd offers our image as image/bmp: BITMAPINFOHEADER width 40 (0x28), height 30 (0x1e).
 grep -q '"mime": "image/bmp", "hex": "424d.\{24\}28000000\(28\|00\)0000001e000000' "$STATE/widget-clip-probe.log" \
     && echo "widget local -> remote image: OK" || { echo "widget local -> remote image: FAILED"; ok=0; }
+
+# --- Files pass: transom-view-demo <-> remote probe (grd serves files via FUSE).
+echo "--- files (both directions, contents compared by SHA-256)"
+podman exec transom-grd pkill -f input-probe || true
+podman exec transom-grd bash -c 'rm -rf /tmp/input-probe.log /tmp/probe-cmd /tmp/clip-src'
+podman run --rm --network host --userns=keep-id \
+    -e SCALE=1 -e MONITOR=1600x1000 -e BIN=/demo/examples/transom-view-demo \
+    -e RUST_LOG="${RUST_LOG:-}" \
+    -v "$PWD/target/debug:/demo:ro,Z" \
+    -v "$PWD/tests/servers/view-check/inner.sh:/inner.sh:ro,Z" \
+    -v "$STATE:/state:Z" \
+    --entrypoint /inner.sh transom-test-grd \
+    localhost:13389 transom --password-file /state/grd.pw --trust "$fp" \
+    --size 1200x800 --file-clip-test --quit-after-ms 30000 >"$STATE/widget-files.log" 2>&1 &
+demo=$!
+sleep 5
+podman cp tests/servers/grd-headless/probe/input-probe.py transom-grd:/tmp/input-probe.py
+podman exec -d transom-grd bash -c '
+    pid=$(pgrep -f "gnome-shell --headless" | head -1)
+    export $(tr "\0" "\n" < /proc/$pid/environ | grep -E "^(DBUS_SESSION_BUS_ADDRESS|XDG_RUNTIME_DIR|WAYLAND_DISPLAY)=")
+    export WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-wayland-0} GDK_BACKEND=wayland
+    exec python3 /tmp/input-probe.py /tmp/input-probe.log'
+sleep 9   # demo copies its files ~6 s after connecting
+probe_cmd paste-files
+sleep 6
+probe_cmd copy-files
+wait "$demo" || true
+podman exec transom-grd pkill -f input-probe || true
+podman exec transom-grd cat /tmp/input-probe.log > "$STATE/files-probe.log" 2>/dev/null || true
+python3 -I - "$STATE/widget-files.log" "$STATE/files-probe.log" <<'PY' || ok=0
+import ast, json, sys
+demo = open(sys.argv[1]).read().splitlines()
+probe = [json.loads(l) for l in open(sys.argv[2]) if l.strip()]
+def demo_map(prefix):
+    # The last parseable report wins (an earlier read can fail while the lazy
+    # provider is still downloading).
+    found = None
+    for l in demo:
+        if l.startswith(prefix):
+            try:
+                found = ast.literal_eval(l[len(prefix):].strip())
+            except (ValueError, SyntaxError):
+                pass
+    return found
+local_set = demo_map("LOCAL FILES SET:")
+pasted = next((e.get("sha") for e in probe if e["t"] == "pasted-files"), None)
+copied = next((e.get("sha") for e in probe if e["t"] == "copied-files"), None)
+received = demo_map("LOCAL CLIPBOARD FILES:")
+ok = True
+for name, a, b in [("local -> remote files", local_set, pasted), ("remote -> local files", copied, received)]:
+    good = bool(a) and a == b
+    ok &= good
+    print(f"{name}: {'OK' if good else 'FAILED'} ({len(a or {})} files)")
+    if not good:
+        print("  want", a, "\n  got ", b)
+sys.exit(0 if ok else 1)
+PY
 [[ $ok == 1 ]]

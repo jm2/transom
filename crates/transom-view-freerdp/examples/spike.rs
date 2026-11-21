@@ -231,7 +231,9 @@ fn main() -> ExitCode {
             | Ok(EngineEvent::PointerPosition { .. })
             | Ok(EngineEvent::ClipboardRemoteFormats(_))
             | Ok(EngineEvent::ClipboardRemoteData { .. }) => {}
-            Ok(EngineEvent::ClipboardDataRequest(_)) => {} // never offered anything
+            Ok(EngineEvent::ClipboardDataRequest(_))
+            | Ok(EngineEvent::ClipboardFileRequest { .. })
+            | Ok(EngineEvent::ClipboardFileData { .. }) => {} // never offered anything
             Ok(EngineEvent::Redirecting { target }) => eprintln!("redirecting to {target}"),
             Ok(EngineEvent::AuthRequired(req)) => {
                 eprintln!(

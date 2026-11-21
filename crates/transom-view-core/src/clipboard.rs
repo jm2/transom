@@ -15,6 +15,9 @@ pub enum ClipFormat {
     Png,
     /// `CF_DIB`: BITMAPINFOHEADER + pixels (what most Windows apps put/expect).
     Dib,
+    /// Registered "FileGroupDescriptorW": a list of files; contents are fetched
+    /// separately with FileContents requests.
+    Files,
 }
 
 /// Standard format ids.
@@ -25,10 +28,12 @@ pub const CF_DIBV5: u32 = 17;
 /// Registered format names.
 pub const HTML_FORMAT_NAME: &str = "HTML Format";
 pub const PNG_FORMAT_NAME: &str = "PNG";
+pub const FILES_FORMAT_NAME: &str = "FileGroupDescriptorW";
 /// Ids we use for registered formats in *our* format lists (any id ≥ 0xC000 works;
 /// the name is what identifies it).
 pub const LOCAL_HTML_ID: u32 = 0xD010;
 pub const LOCAL_PNG_ID: u32 = 0xD011;
+pub const LOCAL_FILES_ID: u32 = 0xD012;
 
 impl ClipFormat {
     /// `(id, name)` to announce in a client format list.
@@ -38,6 +43,7 @@ impl ClipFormat {
             Self::Html => (LOCAL_HTML_ID, Some(HTML_FORMAT_NAME)),
             Self::Png => (LOCAL_PNG_ID, Some(PNG_FORMAT_NAME)),
             Self::Dib => (CF_DIB, None),
+            Self::Files => (LOCAL_FILES_ID, Some(FILES_FORMAT_NAME)),
         }
     }
 
@@ -48,6 +54,7 @@ impl ClipFormat {
             (CF_DIB, _) | (CF_DIBV5, _) => Some(Self::Dib),
             (_, HTML_FORMAT_NAME) => Some(Self::Html),
             (_, PNG_FORMAT_NAME) | (_, "image/png") => Some(Self::Png),
+            (_, FILES_FORMAT_NAME) => Some(Self::Files),
             _ => None,
         }
     }
@@ -253,6 +260,115 @@ pub fn image_to_dib(img: &Image) -> Vec<u8> {
     d
 }
 
+/// What a FileContents request asks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileRange {
+    /// The file's size (reply: 8 bytes, little-endian u64).
+    Size,
+    /// `len` bytes at `offset`.
+    Bytes { offset: u64, len: u32 },
+}
+
+/// One entry of a `FileGroupDescriptorW`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileDescriptor {
+    /// Relative path with `/` separators (converted to/from `\` on the wire).
+    pub path: String,
+    pub size: u64,
+    pub is_dir: bool,
+}
+
+const FD_ATTRIBUTES: u32 = 0x0000_0004;
+const FD_FILESIZE: u32 = 0x0000_0040;
+const FD_SHOWPROGRESSUI: u32 = 0x0000_4000;
+const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x10;
+const FILE_ATTRIBUTE_NORMAL: u32 = 0x80;
+const FILEDESCRIPTORW_LEN: usize = 592;
+/// Upper bound on entries we accept from a remote descriptor.
+pub const MAX_FILES: usize = 100_000;
+
+/// Make a remote-supplied relative path safe to create under a staging directory:
+/// `/` separators, no empty, `.` or `..` components, no drive letters, no NUL or
+/// control characters. Returns `None` if nothing usable remains.
+pub fn sanitize_relative_path(raw: &str) -> Option<String> {
+    let parts: Vec<&str> = raw
+        .split(['\\', '/'])
+        .filter(|p| !p.is_empty() && *p != "." && *p != "..")
+        .collect();
+    if parts.is_empty()
+        || parts
+            .iter()
+            .any(|p| p.contains(':') || p.chars().any(|c| c.is_control()))
+    {
+        return None;
+    }
+    Some(parts.join("/"))
+}
+
+/// Encode a `FileGroupDescriptorW` (MS-RDPECLIP 2.2.5.2.3.1).
+pub fn encode_file_group(files: &[FileDescriptor]) -> Vec<u8> {
+    let mut d = Vec::with_capacity(4 + files.len() * FILEDESCRIPTORW_LEN);
+    d.extend_from_slice(&(files.len() as u32).to_le_bytes());
+    for f in files {
+        let start = d.len();
+        d.extend_from_slice(&(FD_ATTRIBUTES | FD_FILESIZE | FD_SHOWPROGRESSUI).to_le_bytes());
+        d.extend_from_slice(&[0; 16 + 8 + 8]); // clsid, sizel, pointl
+        let attrs = if f.is_dir {
+            FILE_ATTRIBUTE_DIRECTORY
+        } else {
+            FILE_ATTRIBUTE_NORMAL
+        };
+        d.extend_from_slice(&attrs.to_le_bytes());
+        d.extend_from_slice(&[0; 24]); // creation, access, write times
+        d.extend_from_slice(&((f.size >> 32) as u32).to_le_bytes());
+        d.extend_from_slice(&(f.size as u32).to_le_bytes());
+        let name: Vec<u16> = f.path.replace('/', "\\").encode_utf16().take(259).collect();
+        for u in &name {
+            d.extend_from_slice(&u.to_le_bytes());
+        }
+        d.resize(start + FILEDESCRIPTORW_LEN, 0);
+    }
+    d
+}
+
+/// Decode a `FileGroupDescriptorW`. Entries with unsafe names are dropped.
+pub fn decode_file_group(d: &[u8]) -> Option<Vec<FileDescriptor>> {
+    let count = u32le(d, 0)? as usize;
+    if count > MAX_FILES || d.len() < 4 + count * FILEDESCRIPTORW_LEN {
+        return None;
+    }
+    let mut out = Vec::with_capacity(count);
+    for i in 0..count {
+        let e = &d[4 + i * FILEDESCRIPTORW_LEN..][..FILEDESCRIPTORW_LEN];
+        let flags = u32le(e, 0)?;
+        let attrs = if flags & FD_ATTRIBUTES != 0 {
+            u32le(e, 36)?
+        } else {
+            0
+        };
+        let size = if flags & FD_FILESIZE != 0 {
+            ((u32le(e, 64)? as u64) << 32) | u32le(e, 68)? as u64
+        } else {
+            0
+        };
+        let units: Vec<u16> = e[72..]
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|&c| u16::from_le_bytes(c))
+            .take_while(|&u| u != 0)
+            .collect();
+        if let Some(path) = sanitize_relative_path(&String::from_utf16_lossy(&units)) {
+            out.push(FileDescriptor {
+                path,
+                size,
+                is_dir: attrs & FILE_ATTRIBUTE_DIRECTORY != 0,
+            });
+        }
+    }
+    Some(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -329,6 +445,49 @@ mod tests {
         assert_eq!(
             ClipFormat::from_wire(0xC123, Some("Rich Text Format")),
             None
+        );
+    }
+
+    #[test]
+    fn file_group_round_trip() {
+        let files = vec![
+            FileDescriptor {
+                path: "dir".into(),
+                size: 0,
+                is_dir: true,
+            },
+            FileDescriptor {
+                path: "dir/räksmörgås.txt".into(),
+                size: 5_000_000_000,
+                is_dir: false,
+            },
+        ];
+        let enc = encode_file_group(&files);
+        assert_eq!(enc.len(), 4 + 2 * 592);
+        assert_eq!(decode_file_group(&enc).unwrap(), files);
+        assert_eq!(decode_file_group(&enc[..100]), None);
+    }
+
+    #[test]
+    fn hostile_paths_are_neutralised() {
+        assert_eq!(
+            sanitize_relative_path("..\\..\\etc\\passwd").as_deref(),
+            Some("etc/passwd")
+        );
+        assert_eq!(sanitize_relative_path("/abs/x").as_deref(), Some("abs/x"));
+        assert_eq!(sanitize_relative_path("C:\\Windows\\x"), None);
+        assert_eq!(sanitize_relative_path("a\\.\\b").as_deref(), Some("a/b"));
+        assert_eq!(sanitize_relative_path(".."), None);
+        assert_eq!(sanitize_relative_path("bad\u{1}name"), None);
+        let evil = encode_file_group(&[FileDescriptor {
+            path: "../../x".into(),
+            size: 1,
+            is_dir: false,
+        }]);
+        assert_eq!(decode_file_group(&evil).unwrap()[0].path, "x");
+        assert_eq!(
+            ClipFormat::from_wire(0xC0FF, Some(FILES_FORMAT_NAME)),
+            Some(ClipFormat::Files)
         );
     }
 

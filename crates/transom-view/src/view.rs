@@ -392,6 +392,14 @@ mod imp {
                     self.clipboard.remote_data(&obj, format, data)
                 }
                 EngineEvent::ClipboardDataRequest(f) => self.clipboard.data_requested(&obj, f),
+                EngineEvent::ClipboardFileRequest {
+                    stream_id,
+                    index,
+                    range,
+                } => self.clipboard.file_requested(&obj, stream_id, index, range),
+                EngineEvent::ClipboardFileData { stream_id, data } => {
+                    self.clipboard.file_data(stream_id, data)
+                }
                 EngineEvent::Disconnected(reason) => {
                     self.reset_session();
                     obj.set_cursor(None);

@@ -184,8 +184,8 @@ Each phase ends with its Definition of Done (DoD) demonstrated and logged in §1
 - **DoD:** daily-drivable against antec-win and a grd host.
 
 ### Phase 3 — Channels (2–3 weeks)
-- [ ] Clipboard: text, HTML, images, **files** (FUSE-backed or temp-dir staged; document choice).
-      *Text, HTML and images done (`scripts/clipboard-check.sh`); files pending.*
+- [x] Clipboard: text, HTML, images, **files** (lazy temp-dir staging, ADR 0005;
+      `scripts/clipboard-check.sh`).
 - [x] Audio out (rdpsnd) and in (audin) via PipeWire (`scripts/audio-check.sh`).
 - [x] grd remote-login **server redirection** end to end (`scripts/login-check.sh`, systemd+GDM container).
 - [ ] Multi-monitor (span selected monitors, per-monitor scale in the layout PDU).

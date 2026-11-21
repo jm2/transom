@@ -12,7 +12,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 
 use transom_view_core::clipboard::{
-    CF_DIB, CF_UNICODETEXT, ClipFormat, LOCAL_HTML_ID, LOCAL_PNG_ID,
+    CF_DIB, CF_UNICODETEXT, ClipFormat, FileRange, LOCAL_FILES_ID, LOCAL_HTML_ID, LOCAL_PNG_ID,
 };
 use transom_view_core::engine::EngineEvent;
 
@@ -25,6 +25,10 @@ const CB_FORMAT_LIST_RESPONSE: u16 = 0x0003;
 const CB_FORMAT_DATA_REQUEST: u16 = 0x0004;
 const CB_FORMAT_DATA_RESPONSE: u16 = 0x0005;
 const CB_CLIP_CAPS: u16 = 0x0007;
+const CB_FILECONTENTS_REQUEST: u16 = 0x0008;
+const CB_FILECONTENTS_RESPONSE: u16 = 0x0009;
+const FILECONTENTS_SIZE: u32 = 0x1;
+const FILECONTENTS_RANGE: u32 = 0x2;
 const CHANNEL_RC_OK: u32 = 0;
 
 /// Clipboard state shared between callbacks and the engine thread.
@@ -65,6 +69,8 @@ pub(crate) unsafe fn attach(
         (*cliprdr).ServerFormatListResponse = Some(server_format_list_response);
         (*cliprdr).ServerFormatDataRequest = Some(server_format_data_request);
         (*cliprdr).ServerFormatDataResponse = Some(server_format_data_response);
+        (*cliprdr).ServerFileContentsRequest = Some(server_file_contents_request);
+        (*cliprdr).ServerFileContentsResponse = Some(server_file_contents_response);
     }
     state.clip.ctx.store(cliprdr, Ordering::SeqCst);
 }
@@ -215,7 +221,10 @@ unsafe extern "C" fn monitor_ready(
             capabilitySetType: ffi::CB_CAPSTYPE_GENERAL as u16,
             capabilitySetLength: ffi::CB_CAPSTYPE_GENERAL_LEN as u16,
             version: ffi::CB_CAPS_VERSION_2,
-            generalFlags: ffi::CB_USE_LONG_FORMAT_NAMES,
+            generalFlags: ffi::CB_USE_LONG_FORMAT_NAMES
+                | ffi::CB_STREAM_FILECLIP_ENABLED
+                | ffi::CB_FILECLIP_NO_FILE_PATHS
+                | ffi::CB_HUGE_FILE_SUPPORT_ENABLED,
         };
         let caps = ffi::CLIPRDR_CAPABILITIES {
             common: ffi::CLIPRDR_HEADER {
@@ -309,6 +318,7 @@ unsafe extern "C" fn server_format_data_request(
             CF_DIB => Some(ClipFormat::Dib),
             LOCAL_HTML_ID => Some(ClipFormat::Html),
             LOCAL_PNG_ID => Some(ClipFormat::Png),
+            LOCAL_FILES_ID => Some(ClipFormat::Files),
             _ => None,
         };
         let offered = format.is_some_and(|f| {
@@ -359,6 +369,125 @@ unsafe extern "C" fn server_format_data_response(
             "remote clipboard data"
         );
         state.emit(EngineEvent::ClipboardRemoteData { format, data });
+    }
+    CHANNEL_RC_OK
+}
+
+/// Ask the server for (part of) one of its files.
+pub(crate) fn file_request(state: &State, stream_id: u32, index: u32, range: FileRange) {
+    let Some(c) = state.clip.ctx() else {
+        state.emit(EngineEvent::ClipboardFileData {
+            stream_id,
+            data: None,
+        });
+        return;
+    };
+    let (flags, pos, len) = match range {
+        FileRange::Size => (FILECONTENTS_SIZE, 0u64, 8u32),
+        FileRange::Bytes { offset, len } => (FILECONTENTS_RANGE, offset, len),
+    };
+    let req = ffi::CLIPRDR_FILE_CONTENTS_REQUEST {
+        common: ffi::CLIPRDR_HEADER {
+            msgType: CB_FILECONTENTS_REQUEST,
+            msgFlags: 0,
+            dataLen: 24,
+        },
+        streamId: stream_id,
+        listIndex: index,
+        dwFlags: flags,
+        nPositionLow: pos as u32,
+        nPositionHigh: (pos >> 32) as u32,
+        cbRequested: len,
+        haveClipDataId: 0,
+        clipDataId: 0,
+    };
+    // SAFETY: live context; FreeRDP copies the request.
+    unsafe {
+        if let Some(f) = (*c).ClientFileContentsRequest {
+            f(c, &req);
+        }
+    }
+}
+
+/// Answer a server FileContents request.
+pub(crate) fn file_reply(state: &State, stream_id: u32, data: Option<Vec<u8>>) {
+    let Some(c) = state.clip.ctx() else { return };
+    let (flags, len, ptr) = match &data {
+        Some(d) => (ffi::CB_RESPONSE_OK as u16, d.len() as u32, d.as_ptr()),
+        None => (ffi::CB_RESPONSE_FAIL as u16, 0, ptr::null()),
+    };
+    let resp = ffi::CLIPRDR_FILE_CONTENTS_RESPONSE {
+        common: ffi::CLIPRDR_HEADER {
+            msgType: CB_FILECONTENTS_RESPONSE,
+            msgFlags: flags,
+            dataLen: 4 + len,
+        },
+        streamId: stream_id,
+        cbRequested: len,
+        requestedData: ptr,
+    };
+    // SAFETY: live context; `data` outlives the call; FreeRDP copies.
+    unsafe {
+        if let Some(f) = (*c).ClientFileContentsResponse {
+            f(c, &resp);
+        }
+    }
+}
+
+unsafe extern "C" fn server_file_contents_request(
+    c: *mut ffi::CliprdrClientContext,
+    req: *const ffi::CLIPRDR_FILE_CONTENTS_REQUEST,
+) -> u32 {
+    // SAFETY: FreeRDP passes our context and a valid request.
+    unsafe {
+        let Some(state) = state_of(c) else {
+            return CHANNEL_RC_OK;
+        };
+        let r = &*req;
+        let range = if r.dwFlags & FILECONTENTS_SIZE != 0 {
+            FileRange::Size
+        } else {
+            FileRange::Bytes {
+                offset: ((r.nPositionHigh as u64) << 32) | r.nPositionLow as u64,
+                len: r.cbRequested,
+            }
+        };
+        let offered = state
+            .clip
+            .local
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(&ClipFormat::Files);
+        if offered {
+            state.emit(EngineEvent::ClipboardFileRequest {
+                stream_id: r.streamId,
+                index: r.listIndex,
+                range,
+            });
+        } else {
+            file_reply(state, r.streamId, None);
+        }
+    }
+    CHANNEL_RC_OK
+}
+
+unsafe extern "C" fn server_file_contents_response(
+    c: *mut ffi::CliprdrClientContext,
+    resp: *const ffi::CLIPRDR_FILE_CONTENTS_RESPONSE,
+) -> u32 {
+    // SAFETY: FreeRDP passes a valid response with `cbRequested` bytes of data.
+    unsafe {
+        let Some(state) = state_of(c) else {
+            return CHANNEL_RC_OK;
+        };
+        let r = &*resp;
+        let ok = r.common.msgFlags as u32 & ffi::CB_RESPONSE_OK != 0;
+        let data = (ok && !r.requestedData.is_null())
+            .then(|| std::slice::from_raw_parts(r.requestedData, r.cbRequested as usize).to_vec());
+        state.emit(EngineEvent::ClipboardFileData {
+            stream_id: r.streamId,
+            data,
+        });
     }
     CHANNEL_RC_OK
 }

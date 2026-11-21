@@ -16,6 +16,8 @@ tracing.workspace = true
 transom-view-core.workspace = true
 
 [dev-dependencies]
+# sha2: the demo's file-clipboard test compares file hashes.
+sha2.workspace = true
 transom-view-freerdp.workspace = true
 # tracing-subscriber: RUST_LOG output in the demo.
 tracing-subscriber = { version = "0.3", default-features = false, features = ["env-filter", "fmt"] }

@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use secrecy::SecretString;
 
-use crate::clipboard::ClipFormat;
+use crate::clipboard::{ClipFormat, FileRange};
 use crate::config::SessionConfig;
 use crate::geometry::{DesktopRequest, ScaleFactors, Size};
 use crate::trust::CertInfo;
@@ -221,6 +221,18 @@ pub enum EngineEvent {
     /// The remote wants our clipboard content in `format`. Answer with
     /// [`EngineCommand::ClipboardReply`] (always, even on failure).
     ClipboardDataRequest(ClipFormat),
+    /// The remote wants (part of) file `index` of the file list we offered. Answer
+    /// with [`EngineCommand::ClipboardFileReply`] using the same `stream_id`.
+    ClipboardFileRequest {
+        stream_id: u32,
+        index: u32,
+        range: FileRange,
+    },
+    /// Reply to [`EngineCommand::ClipboardFileRequest`].
+    ClipboardFileData {
+        stream_id: u32,
+        data: Option<Vec<u8>>,
+    },
     Disconnected(DisconnectReason),
 }
 
@@ -298,6 +310,17 @@ pub enum EngineCommand {
     /// Answer a `ClipboardDataRequest`; `None` reports failure.
     ClipboardReply {
         format: ClipFormat,
+        data: Option<Vec<u8>>,
+    },
+    /// Fetch (part of) file `index` of the remote's file list.
+    ClipboardFileRequest {
+        stream_id: u32,
+        index: u32,
+        range: FileRange,
+    },
+    /// Answer a `ClipboardFileRequest`; `None` reports failure.
+    ClipboardFileReply {
+        stream_id: u32,
         data: Option<Vec<u8>>,
     },
     Disconnect,

@@ -15,6 +15,8 @@
 //!   --resize-to WxH       resize the window 4 s after connecting (tests renegotiation)
 //!   --check-after-ms N    start checking N ms after connecting (default 3000)
 //!   --quit-after-ms N     disconnect cleanly and quit N ms after connecting
+//!   --file-clip-test      copy local test files 6 s after connecting and print
+//!                         SHA-256 of files arriving on the local clipboard
 //!   --clip-test           put test text on the local clipboard 6 s after connecting
 //!                         and log every local clipboard change (text / image size)
 
@@ -50,6 +52,7 @@ struct Args {
     check_after_ms: u32,
     quit_after_ms: Option<u64>,
     clip_test: bool,
+    file_clip_test: bool,
 }
 
 fn parse() -> Result<Args, String> {
@@ -76,6 +79,7 @@ fn parse() -> Result<Args, String> {
         check_after_ms: 3000,
         quit_after_ms: None,
         clip_test: false,
+        file_clip_test: false,
     };
     while let Some(flag) = it.next() {
         let mut val = || it.next().ok_or(format!("{flag} needs a value"));
@@ -119,6 +123,7 @@ fn parse() -> Result<Args, String> {
             }
             "--check-after-ms" => a.check_after_ms = val()?.parse().map_err(|_| "bad ms")?,
             "--clip-test" => a.clip_test = true,
+            "--file-clip-test" => a.file_clip_test = true,
             "--quit-after-ms" => a.quit_after_ms = Some(val()?.parse().map_err(|_| "bad ms")?),
             "--screenshot" => a.screenshot = Some(val()?),
             other => return Err(format!("unknown flag {other}")),
@@ -243,6 +248,9 @@ fn build(app: &gtk::Application, args: Args, code: Rc<Cell<u8>>) {
             app.quit();
         }
     });
+    if args.file_clip_test {
+        install_file_clip_test(&view);
+    }
     if args.clip_test {
         let cb = view.clipboard();
         cb.connect_changed(|cb| {
@@ -622,4 +630,86 @@ fn run_check(view: &TransomView, screenshot: Option<&str>) -> bool {
         }
     );
     exact
+}
+
+/// `--file-clip-test`: copy local files, and hash files that arrive from the remote.
+fn install_file_clip_test(view: &TransomView) {
+    use sha2::{Digest, Sha256};
+    fn hash_tree(paths: &[std::path::PathBuf]) -> std::collections::BTreeMap<String, String> {
+        fn walk(
+            p: &std::path::Path,
+            base: &std::path::Path,
+            out: &mut std::collections::BTreeMap<String, String>,
+        ) {
+            if p.is_dir() {
+                if let Ok(rd) = std::fs::read_dir(p) {
+                    for e in rd.flatten() {
+                        walk(&e.path(), base, out);
+                    }
+                }
+            } else if let Ok(data) = std::fs::read(p) {
+                let rel = p
+                    .strip_prefix(base)
+                    .unwrap_or(p)
+                    .to_string_lossy()
+                    .into_owned();
+                out.insert(rel, format!("{:x}", Sha256::digest(&data)));
+            }
+        }
+        let mut out = Default::default();
+        for p in paths {
+            let base = p.parent().unwrap_or(p);
+            walk(p, base, &mut out);
+        }
+        out
+    }
+    let cb = view.clipboard();
+    cb.connect_changed(|cb| {
+        if cb.is_local() && !cb.formats().contain_mime_type("text/uri-list") {
+            return;
+        }
+        let local_set = cb
+            .formats()
+            .contains_type(gtk::gdk::FileList::static_type())
+            && cb.is_local()
+            && !cb
+                .formats()
+                .contain_mime_type("x-special/gnome-copied-files");
+        if local_set {
+            return; // our own copy below
+        }
+        cb.read_value_async(
+            gtk::gdk::FileList::static_type(),
+            glib::Priority::DEFAULT,
+            gtk::gio::Cancellable::NONE,
+            |r| match r.ok().and_then(|v| v.get::<gtk::gdk::FileList>().ok()) {
+                Some(list) => {
+                    let paths: Vec<_> = list.files().iter().filter_map(|f| f.path()).collect();
+                    println!("LOCAL CLIPBOARD FILES: {:?}", hash_tree(&paths));
+                }
+                None => println!("LOCAL CLIPBOARD FILES: read failed"),
+            },
+        );
+    });
+    view.connect_connected(|v| {
+        let v = v.clone();
+        glib::timeout_add_local_once(Duration::from_secs(6), move || {
+            let dir = std::env::temp_dir().join("transom-demo-files");
+            let _ = std::fs::create_dir_all(dir.join("sub"));
+            let _ = std::fs::write(dir.join("hello.txt"), "hello from the local side\n");
+            let blob: Vec<u8> = (0..(2 * 1024 * 1024 + 3) as u32)
+                .map(|i| (i.wrapping_mul(2654435761) >> 13) as u8)
+                .collect();
+            let _ = std::fs::write(dir.join("sub").join("data.bin"), blob);
+            let roots = vec![dir.join("hello.txt"), dir.join("sub")];
+            println!("LOCAL FILES SET: {:?}", hash_tree(&roots));
+            let files: Vec<gtk::gio::File> = roots.iter().map(gtk::gio::File::for_path).collect();
+            let list = gtk::gdk::FileList::from_array(&files);
+            v.clipboard()
+                .set_content(Some(&gtk::gdk::ContentProvider::for_value(
+                    &list.to_value(),
+                )))
+                .ok();
+        });
+    });
 }
