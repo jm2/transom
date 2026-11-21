@@ -917,7 +917,23 @@ unsafe extern "C" fn authenticate_ex(
         let Some(state) = state((*instance).context) else {
             return FALSE;
         };
-        state.auth_attempts.fetch_add(1, Ordering::SeqCst);
+        let attempt = state.auth_attempts.fetch_add(1, Ordering::SeqCst) + 1;
+        // Kerberos single sign-on: answer the first request with empty credentials
+        // so NLA uses the ticket cache (FreeRDP: "empty credentials = proceed
+        // without"). Later requests mean the ticket didn't work: ask the user.
+        if state.config.kerberos && attempt == 1 {
+            let user = cstr_opt(*username)
+                .or_else(|| state.config.username.clone())
+                .unwrap_or_default();
+            let dom = cstr_opt(*domain)
+                .or_else(|| state.config.domain.clone())
+                .unwrap_or_default();
+            tracing::info!("using the Kerberos ticket cache");
+            let ok = replace_cstring(username, &user)
+                && replace_cstring(domain, &dom)
+                && replace_cstring(password, "");
+            return if ok { TRUE } else { FALSE };
+        }
         let kind = match reason {
             ffi::GW_AUTH_HTTP | ffi::GW_AUTH_RDG | ffi::GW_AUTH_RPC => AuthKind::Gateway,
             _ => AuthKind::Server,

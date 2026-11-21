@@ -242,6 +242,7 @@ fn build(app: &gtk::Application, args: Args, code: Rc<Cell<u8>>) {
         clipboard: transom_view::core::config::ClipboardMode::Both,
         audio: transom_view::core::config::AudioMode::Off,
         microphone: false,
+        kerberos: false,
         // Replaced by the view with a request computed from its size and scale.
         initial: desktop_request(args.scale_mode, Default::default(), 1.0),
         monitors: Vec::new(),
@@ -831,6 +832,7 @@ fn build_multimon(app: &gtk::Application, args: Args, code: Rc<Cell<u8>>) {
         clipboard: transom_view::core::config::ClipboardMode::Off,
         audio: transom_view::core::config::AudioMode::Off,
         microphone: false,
+        kerberos: false,
         initial: desktop_request(args.scale_mode, Default::default(), 1.0),
         monitors: layout.clone(),
     };

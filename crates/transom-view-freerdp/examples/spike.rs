@@ -5,6 +5,7 @@
 //! spike HOST[:PORT] USER [--domain D] [--password-file FILE] [--trust SHA256]
 //!       [--size WxH] [--scale S] [--out frame.png] [--settle-ms N]
 //!       [--audio] [--mic] [--stay-ms N]   (audio out / microphone in; stay N ms)
+//!       [--kerberos]   (no password: use the Kerberos ticket in KRB5CCNAME)
 //! ```
 //!
 //! The password is read from `--password-file` or, if absent, the first line of stdin.
@@ -37,6 +38,7 @@ struct Args {
     settle: Duration,
     audio: bool,
     mic: bool,
+    kerberos: bool,
     stay: Option<Duration>,
 }
 
@@ -61,6 +63,7 @@ fn parse() -> Result<Args, String> {
         settle: Duration::from_millis(1500),
         audio: false,
         mic: false,
+        kerberos: false,
         stay: None,
     };
     while let Some(flag) = it.next() {
@@ -86,6 +89,7 @@ fn parse() -> Result<Args, String> {
             }
             "--audio" => a.audio = true,
             "--mic" => a.mic = true,
+            "--kerberos" => a.kerberos = true,
             "--stay-ms" => {
                 a.stay = Some(Duration::from_millis(val()?.parse().map_err(|_| "bad ms")?))
             }
@@ -139,7 +143,12 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let password = match read_password(&args) {
+    let password = if args.kerberos {
+        Ok(SecretString::from(String::new()))
+    } else {
+        read_password(&args)
+    };
+    let password = match password {
         Ok(p) => p,
         Err(e) => {
             eprintln!("error reading password: {e}");
@@ -162,7 +171,7 @@ fn main() -> ExitCode {
         port: args.port,
         username: Some(args.user.clone()),
         domain: args.domain.clone(),
-        password: Some(password),
+        password: (!args.kerberos).then_some(password),
         security: SecurityMode::Negotiate,
         cert_policy: CertPolicy::Verify,
         scale_mode: ScaleMode::MatchLocal,
@@ -174,6 +183,7 @@ fn main() -> ExitCode {
             transom_view_core::config::AudioMode::Off
         },
         microphone: args.mic,
+        kerberos: args.kerberos,
         initial,
         monitors: Vec::new(),
     };
@@ -236,6 +246,15 @@ fn main() -> ExitCode {
             | Ok(EngineEvent::ClipboardFileRequest { .. })
             | Ok(EngineEvent::ClipboardFileData { .. }) => {} // never offered anything
             Ok(EngineEvent::Redirecting { target }) => eprintln!("redirecting to {target}"),
+            Ok(EngineEvent::AuthRequired(req)) if args.kerberos => {
+                // Empty credentials: proceed without a password (Kerberos ticket).
+                eprintln!("credentials requested; answering empty for Kerberos");
+                let _ = req.reply.send(Some(transom_view_core::engine::Credentials {
+                    username: req.username.clone().unwrap_or_else(|| args.user.clone()),
+                    domain: req.domain.clone().or(args.domain.clone()),
+                    password: SecretString::from(String::new()),
+                }));
+            }
             Ok(EngineEvent::AuthRequired(req)) => {
                 eprintln!(
                     "server asked for credentials again ({:?}); giving up",

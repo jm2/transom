@@ -82,6 +82,9 @@ pub struct SessionConfig {
     pub audio: AudioMode,
     /// Redirect the local microphone (off by default).
     pub microphone: bool,
+    /// Authenticate with the Kerberos ticket cache (single sign-on): no password is
+    /// asked for; NLA uses the ticket for `username@domain`.
+    pub kerberos: bool,
     /// Initial desktop request, computed from the widget size by the caller.
     pub initial: DesktopRequest,
     /// Multi-monitor layout (see `monitors::layout`). Empty or one entry: a single

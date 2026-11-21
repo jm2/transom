@@ -191,6 +191,7 @@ fn main() -> ExitCode {
         clipboard: transom_view_core::config::ClipboardMode::Both,
         audio: transom_view_core::config::AudioMode::Off,
         microphone: false,
+        kerberos: false,
         initial: desktop_request(ScaleMode::MatchLocal, LogicalSize::new(1024.0, 768.0), 1.0),
         monitors: Vec::new(),
     };

@@ -52,6 +52,8 @@ pub struct Profile {
     pub clipboard: ClipboardMode,
     pub audio: AudioMode,
     pub microphone: bool,
+    /// Kerberos single sign-on (ticket cache) instead of a password.
+    pub kerberos: bool,
     pub multimon: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gateway: Option<Gateway>,
@@ -76,6 +78,7 @@ impl Default for Profile {
             clipboard: ClipboardMode::default(),
             audio: AudioMode::default(),
             microphone: false,
+            kerberos: false,
             multimon: false,
             gateway: None,
             rdp_extra: BTreeMap::new(),
@@ -280,6 +283,7 @@ impl Profile {
             clipboard: self.clipboard,
             audio: self.audio,
             microphone: self.microphone,
+            kerberos: self.kerberos,
             initial: desktop_request(self.scale, LogicalSize::new(1024.0, 768.0), 1.0),
             monitors: Vec::new(),
         }

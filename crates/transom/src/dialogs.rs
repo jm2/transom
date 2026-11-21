@@ -296,7 +296,13 @@ pub fn profile_editor(
         .active(profile.certificate == CertPolicy::Ignore)
         .build();
     ignore_cert.add_css_class("warning");
+    let kerberos = adw::SwitchRow::builder()
+        .title("Use Kerberos Ticket")
+        .subtitle("Single sign-on with your Kerberos login (kinit); no password needed")
+        .active(profile.kerberos)
+        .build();
     security.add(&sec);
+    security.add(&kerberos);
     security.add(&ignore_cert);
     page.add(&security);
 
@@ -360,6 +366,7 @@ pub fn profile_editor(
             p.domain = opt(&domain);
             p.scale = SCALE_CHOICES[scale.selected() as usize % SCALE_CHOICES.len()].1;
             p.multimon = multimon.is_active();
+            p.kerberos = kerberos.is_active();
             p.fit = if fit.is_active() {
                 FitMode::Fit
             } else {

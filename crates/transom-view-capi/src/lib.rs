@@ -112,6 +112,7 @@ pub unsafe extern "C" fn transom_view_connect_to(
         clipboard: ClipboardMode::Both,
         audio: AudioMode::Local,
         microphone: false,
+        kerberos: false,
         initial: desktop_request(ScaleMode::MatchLocal, Default::default(), 1.0),
         monitors: Vec::new(),
     };

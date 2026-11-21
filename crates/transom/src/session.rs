@@ -212,6 +212,7 @@ impl Session {
             let profile = s.profile.borrow().clone();
             let password = match password {
                 Some(p) => Some(p),
+                None if profile.kerberos => None,
                 None if !s.temporary && !s.skip_saved_password.get() => {
                     secrets::lookup(&profile.id).await
                 }
