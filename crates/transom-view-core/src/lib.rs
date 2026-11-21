@@ -4,6 +4,7 @@
 //! No GTK, no FFI, no platform-specific code: this crate builds and tests on Linux,
 //! macOS and Windows.
 
+pub mod clipboard;
 pub mod config;
 pub mod engine;
 pub mod fsutil;

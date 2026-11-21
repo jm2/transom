@@ -6,7 +6,7 @@ use std::rc::Rc;
 
 use adw::prelude::*;
 use gtk::glib;
-use transom_view::core::config::{CertPolicy, SecurityMode};
+use transom_view::core::config::{CertPolicy, ClipboardMode, SecurityMode};
 use transom_view::core::engine::{CertDecision, CertPrompt};
 use transom_view::core::geometry::{FitMode, ScaleMode};
 use transom_view::core::profile::Profile;
@@ -188,6 +188,12 @@ const SCALE_CHOICES: &[(&str, ScaleMode)] = &[
     ("Fixed 200%", ScaleMode::Fixed(200)),
     ("Legacy (Stretch 100%)", ScaleMode::Legacy100),
 ];
+const CLIPBOARD_CHOICES: &[(&str, ClipboardMode)] = &[
+    ("Both Directions", ClipboardMode::Both),
+    ("Only to Remote", ClipboardMode::ToRemote),
+    ("Only from Remote", ClipboardMode::FromRemote),
+    ("Off", ClipboardMode::Off),
+];
 const SECURITY_CHOICES: &[(&str, SecurityMode)] = &[
     ("Automatic", SecurityMode::Negotiate),
     ("NLA Only", SecurityMode::Nla),
@@ -257,6 +263,11 @@ pub fn profile_editor(
     display.add(&scale);
     display.add(&fit);
     page.add(&display);
+
+    let devices = adw::PreferencesGroup::builder().title("Sharing").build();
+    let clip = combo("Clipboard", CLIPBOARD_CHOICES, profile.clipboard);
+    devices.add(&clip);
+    page.add(&devices);
 
     let security = adw::PreferencesGroup::builder().title("Security").build();
     let sec = combo("Protocol Security", SECURITY_CHOICES, profile.security);
@@ -328,6 +339,7 @@ pub fn profile_editor(
             } else {
                 FitMode::Scroll
             };
+            p.clipboard = CLIPBOARD_CHOICES[clip.selected() as usize % CLIPBOARD_CHOICES.len()].1;
             p.security = SECURITY_CHOICES[sec.selected() as usize % SECURITY_CHOICES.len()].1;
             p.certificate = if ignore_cert.is_active() {
                 CertPolicy::Ignore

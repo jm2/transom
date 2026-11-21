@@ -32,6 +32,27 @@ pub enum CertPolicy {
     Ignore,
 }
 
+/// Which way the clipboard is shared.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ClipboardMode {
+    #[default]
+    Both,
+    ToRemote,
+    FromRemote,
+    Off,
+}
+
+impl ClipboardMode {
+    pub fn to_remote(self) -> bool {
+        matches!(self, Self::Both | Self::ToRemote)
+    }
+
+    pub fn from_remote(self) -> bool {
+        matches!(self, Self::Both | Self::FromRemote)
+    }
+}
+
 /// Everything an engine needs to open one session.
 #[derive(Debug, Clone)]
 pub struct SessionConfig {
@@ -45,6 +66,7 @@ pub struct SessionConfig {
     pub cert_policy: CertPolicy,
     pub scale_mode: ScaleMode,
     pub fit_mode: FitMode,
+    pub clipboard: ClipboardMode,
     /// Initial desktop request, computed from the widget size by the caller.
     pub initial: DesktopRequest,
 }

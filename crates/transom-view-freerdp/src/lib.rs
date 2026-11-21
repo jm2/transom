@@ -16,6 +16,7 @@ pub mod ffi {
     include!(concat!(env!("OUT_DIR"), "/freerdp_bindings.rs"));
 }
 
+mod cliprdr;
 mod engine;
 
 pub use engine::FreeRdpEngine;

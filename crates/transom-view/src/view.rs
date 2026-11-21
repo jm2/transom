@@ -52,6 +52,7 @@ mod imp {
     pub struct TransomView {
         pub(super) inner: RefCell<Inner>,
         pub(super) auth_handler: RefCell<Option<AuthHandler>>,
+        pub(super) clipboard: crate::clipboard::ClipboardBridge,
         pub(super) cert_handler: RefCell<Option<CertHandler>>,
     }
 
@@ -381,6 +382,11 @@ mod imp {
                     self.inner.borrow_mut().resize_available = true;
                     self.schedule_layout();
                 }
+                EngineEvent::ClipboardRemoteFormats(f) => self.clipboard.remote_formats(&obj, f),
+                EngineEvent::ClipboardRemoteData { format, data } => {
+                    self.clipboard.remote_data(&obj, format, data)
+                }
+                EngineEvent::ClipboardDataRequest(f) => self.clipboard.data_requested(&obj, f),
                 EngineEvent::Disconnected(reason) => {
                     self.reset_session();
                     obj.set_cursor(None);
@@ -391,6 +397,7 @@ mod imp {
         }
 
         pub(super) fn reset_session(&self) {
+            self.clipboard.stop();
             let mut inner = self.inner.borrow_mut();
             if let Some(id) = inner.layout_timer.take() {
                 id.remove();
@@ -744,7 +751,8 @@ impl TransomView {
         let imp = self.imp();
         config.initial = imp.desktop_request(config.scale_mode);
         let initial = config.initial;
-        let (scale_mode, fit_mode) = (config.scale_mode, config.fit_mode);
+        let (scale_mode, fit_mode, clip_mode) =
+            (config.scale_mode, config.fit_mode, config.clipboard);
 
         let (tx, rx) = async_channel::unbounded();
         let handle = engine.connect(
@@ -764,6 +772,8 @@ impl TransomView {
             inner.layout.update(initial);
             inner.session
         };
+
+        imp.clipboard.start(self, clip_mode);
 
         let weak = self.downgrade();
         glib::spawn_future_local(async move {
@@ -845,6 +855,11 @@ impl TransomView {
     pub fn invalidate(&self) {
         self.imp().inner.borrow_mut().tiles.clear();
         self.queue_draw();
+    }
+
+    /// Queue a raw engine command (crate-internal: clipboard bridge).
+    pub(crate) fn send_command(&self, cmd: EngineCommand) {
+        self.imp().send(cmd);
     }
 
     pub fn send_ctrl_alt_del(&self) {

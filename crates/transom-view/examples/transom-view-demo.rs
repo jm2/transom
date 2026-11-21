@@ -15,6 +15,8 @@
 //!   --resize-to WxH       resize the window 4 s after connecting (tests renegotiation)
 //!   --check-after-ms N    start checking N ms after connecting (default 3000)
 //!   --quit-after-ms N     disconnect cleanly and quit N ms after connecting
+//!   --clip-test           put test text on the local clipboard 6 s after connecting
+//!                         and log every local clipboard change (text / image size)
 
 use std::cell::{Cell, RefCell};
 use std::process::ExitCode;
@@ -47,6 +49,7 @@ struct Args {
     resize_to: Option<(i32, i32)>,
     check_after_ms: u32,
     quit_after_ms: Option<u64>,
+    clip_test: bool,
 }
 
 fn parse() -> Result<Args, String> {
@@ -72,6 +75,7 @@ fn parse() -> Result<Args, String> {
         resize_to: None,
         check_after_ms: 3000,
         quit_after_ms: None,
+        clip_test: false,
     };
     while let Some(flag) = it.next() {
         let mut val = || it.next().ok_or(format!("{flag} needs a value"));
@@ -114,6 +118,7 @@ fn parse() -> Result<Args, String> {
                 ));
             }
             "--check-after-ms" => a.check_after_ms = val()?.parse().map_err(|_| "bad ms")?,
+            "--clip-test" => a.clip_test = true,
             "--quit-after-ms" => a.quit_after_ms = Some(val()?.parse().map_err(|_| "bad ms")?),
             "--screenshot" => a.screenshot = Some(val()?),
             other => return Err(format!("unknown flag {other}")),
@@ -123,6 +128,10 @@ fn parse() -> Result<Args, String> {
 }
 
 fn main() -> ExitCode {
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_writer(std::io::stderr)
+        .init();
     let args = match parse() {
         Ok(a) => a,
         Err(e) => {
@@ -216,6 +225,7 @@ fn build(app: &gtk::Application, args: Args, code: Rc<Cell<u8>>) {
         cert_policy: CertPolicy::Verify,
         scale_mode: args.scale_mode,
         fit_mode: args.fit,
+        clipboard: transom_view::core::config::ClipboardMode::Both,
         // Replaced by the view with a request computed from its size and scale.
         initial: desktop_request(args.scale_mode, Default::default(), 1.0),
     };
@@ -231,6 +241,48 @@ fn build(app: &gtk::Application, args: Args, code: Rc<Cell<u8>>) {
             app.quit();
         }
     });
+    if args.clip_test {
+        let cb = view.clipboard();
+        cb.connect_changed(|cb| {
+            let formats = cb.formats().to_str().to_string();
+            cb.read_text_async(gtk::gio::Cancellable::NONE, move |r| {
+                if let Ok(Some(t)) = r {
+                    println!("LOCAL CLIPBOARD TEXT: {t:?} [{formats}]");
+                }
+            });
+            if cb.formats().contains_type(gdk::Texture::static_type()) {
+                cb.read_texture_async(gtk::gio::Cancellable::NONE, |r| {
+                    if let Ok(Some(t)) = r {
+                        println!("LOCAL CLIPBOARD IMAGE: {}x{}", t.width(), t.height());
+                    }
+                });
+            }
+        });
+        view.connect_connected(|v| {
+            let v2 = v.clone();
+            glib::timeout_add_local_once(Duration::from_secs(6), move || {
+                v2.clipboard().set_text("from the local side ✓");
+                println!("set local clipboard");
+            });
+            let v3 = v.clone();
+            glib::timeout_add_local_once(Duration::from_secs(18), move || {
+                let rgba: Vec<u8> = (0..30u32)
+                    .flat_map(|y| {
+                        (0..40u32).flat_map(move |x| [(x * 6) as u8, (y * 8) as u8, 60, 255])
+                    })
+                    .collect();
+                let tex = gdk::MemoryTexture::new(
+                    40,
+                    30,
+                    gdk::MemoryFormat::R8g8b8a8,
+                    &glib::Bytes::from_owned(rgba),
+                    160,
+                );
+                v3.clipboard().set_texture(&tex);
+                println!("set local clipboard image");
+            });
+        });
+    }
     if let Some(ms) = args.quit_after_ms {
         let app = app.clone();
         view.connect_connected(move |v| {

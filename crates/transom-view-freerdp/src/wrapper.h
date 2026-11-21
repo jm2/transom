@@ -8,6 +8,8 @@
 #include <freerdp/channels/channels.h>
 #include <freerdp/client/channels.h>
 #include <freerdp/client/disp.h>
+#include <freerdp/client/cliprdr.h>
+#include <freerdp/channels/cliprdr.h>
 #include <freerdp/client/rdpgfx.h>
 #include <freerdp/channels/disp.h>
 #include <freerdp/channels/rdpgfx.h>

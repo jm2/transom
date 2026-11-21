@@ -17,6 +17,8 @@ transom-view-core.workspace = true
 
 [dev-dependencies]
 transom-view-freerdp.workspace = true
+# tracing-subscriber: RUST_LOG output in the demo.
+tracing-subscriber = { version = "0.3", default-features = false, features = ["env-filter", "fmt"] }
 
 [lints]
 workspace = true

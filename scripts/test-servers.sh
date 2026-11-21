@@ -51,7 +51,9 @@ up)
     podman build -q -t transom-test-grd tests/servers/grd-headless >/dev/null
     podman build -q -t transom-test-xrdp tests/servers/xrdp >/dev/null
     podman rm -f transom-grd transom-xrdp >/dev/null 2>&1 || true
-    podman run -d --name transom-grd --userns=keep-id \
+    # /dev/fuse + CAP_SYS_ADMIN (namespaced to the rootless container): grd mounts a
+    # FUSE filesystem for clipboard file transfer and aborts if it can't.
+    podman run -d --name transom-grd --userns=keep-id --device /dev/fuse --cap-add SYS_ADMIN \
         -p "127.0.0.1:$GRD_PORT:3389" \
         -v "$STATE/grd.creds:/run/transom/creds:ro,Z" \
         transom-test-grd >/dev/null

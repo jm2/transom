@@ -15,16 +15,7 @@ use crate::config::{CertPolicy, DEFAULT_PORT, SecurityMode, SessionConfig};
 use crate::geometry::{FitMode, LogicalSize, ScaleMode, desktop_request};
 use crate::rdpfile::{RdpFile, RdpValue, join_host_port};
 
-/// Which way the clipboard is shared.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum ClipboardMode {
-    #[default]
-    Both,
-    ToRemote,
-    FromRemote,
-    Off,
-}
+pub use crate::config::ClipboardMode;
 
 /// Where remote audio plays (`audiomode` in `.rdp` files).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -289,6 +280,7 @@ impl Profile {
             cert_policy: self.certificate,
             scale_mode: self.scale,
             fit_mode: self.fit,
+            clipboard: self.clipboard,
             initial: desktop_request(self.scale, LogicalSize::new(1024.0, 768.0), 1.0),
         }
     }

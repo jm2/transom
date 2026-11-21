@@ -155,6 +155,7 @@ fn main() -> ExitCode {
         cert_policy: CertPolicy::Verify,
         scale_mode: ScaleMode::MatchLocal,
         fit_mode: FitMode::Fit,
+        clipboard: transom_view_core::config::ClipboardMode::Both,
         initial,
     };
 
@@ -207,7 +208,11 @@ fn main() -> ExitCode {
                 eprintln!("desktop resized to {}x{}", s.width, s.height)
             }
             Ok(EngineEvent::ResizeAvailable) => eprintln!("display control available"),
-            Ok(EngineEvent::Pointer(_)) | Ok(EngineEvent::PointerPosition { .. }) => {}
+            Ok(EngineEvent::Pointer(_))
+            | Ok(EngineEvent::PointerPosition { .. })
+            | Ok(EngineEvent::ClipboardRemoteFormats(_))
+            | Ok(EngineEvent::ClipboardRemoteData { .. }) => {}
+            Ok(EngineEvent::ClipboardDataRequest(_)) => {} // never offered anything
             Ok(EngineEvent::Redirecting { target }) => eprintln!("redirecting to {target}"),
             Ok(EngineEvent::AuthRequired(req)) => {
                 eprintln!(

@@ -188,6 +188,7 @@ fn main() -> ExitCode {
         cert_policy: CertPolicy::Verify,
         scale_mode: ScaleMode::MatchLocal,
         fit_mode: FitMode::Fit,
+        clipboard: transom_view_core::config::ClipboardMode::Both,
         initial: desktop_request(ScaleMode::MatchLocal, LogicalSize::new(1024.0, 768.0), 1.0),
     };
     let dir = std::env::temp_dir().join("transom-inputtest-freerdp");

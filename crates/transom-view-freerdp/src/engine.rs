@@ -144,7 +144,7 @@ impl Drop for FreeRdpWaker {
 }
 
 /// State shared between the engine thread and FreeRDP callbacks.
-struct State {
+pub(crate) struct State {
     sink: Mutex<EventSink>,
     frame: Mutex<Option<SharedFrame>>,
     disp: AtomicPtr<ffi::DispClientContext>,
@@ -154,10 +154,11 @@ struct State {
     auth_attempts: AtomicU32,
     cert_rejected: AtomicBool,
     auth_cancelled: AtomicBool,
+    pub(crate) clip: crate::cliprdr::ClipState,
 }
 
 impl State {
-    fn emit(&self, ev: EngineEvent) {
+    pub(crate) fn emit(&self, ev: EngineEvent) {
         let sink = self.sink.lock().unwrap_or_else(|e| e.into_inner());
         sink(ev);
     }
@@ -196,7 +197,7 @@ struct TransomPointer {
 
 /// # Safety
 /// `ctx` must be a context created from our entry points, or null.
-unsafe fn state<'a>(ctx: *mut ffi::rdpContext) -> Option<&'a State> {
+pub(crate) unsafe fn state<'a>(ctx: *mut ffi::rdpContext) -> Option<&'a State> {
     if ctx.is_null() {
         return None;
     }
@@ -267,6 +268,7 @@ fn run(
         auth_attempts: AtomicU32::new(0),
         cert_rejected: AtomicBool::new(false),
         auth_cancelled: AtomicBool::new(false),
+        clip: Default::default(),
     });
     // SAFETY: `session` upholds FreeRDP's lifecycle; `state` outlives the context.
     let reason = unsafe { session(&state, &rx, &waker, &config_dir) };
@@ -380,6 +382,15 @@ unsafe fn event_loop(
                 Ok(EngineCommand::Input(ev)) => unsafe { send_input((*ctx).input, ev) },
                 // SAFETY: as above.
                 Ok(EngineCommand::CtrlAltDel) => unsafe { send_ctrl_alt_del((*ctx).input) },
+                Ok(EngineCommand::ClipboardLocalFormats(f)) => {
+                    if state.config.clipboard.to_remote() {
+                        crate::cliprdr::set_local_formats(state, f);
+                    }
+                }
+                Ok(EngineCommand::ClipboardRequest(f)) => crate::cliprdr::request(state, f),
+                Ok(EngineCommand::ClipboardReply { format, data }) => {
+                    crate::cliprdr::reply(state, format, data)
+                }
                 Err(mpsc::TryRecvError::Empty) => break,
             }
         }
@@ -524,7 +535,10 @@ unsafe fn apply_settings(
     set_bool(ffi::FreeRDP_SupportGraphicsPipeline, true)?;
     set_bool(ffi::FreeRDP_SupportDisplayControl, true)?;
     set_bool(ffi::FreeRDP_DynamicResolutionUpdate, true)?;
-    set_bool(ffi::FreeRDP_RedirectClipboard, false)?;
+    set_bool(
+        ffi::FreeRDP_RedirectClipboard,
+        cfg.clipboard != transom_view_core::config::ClipboardMode::Off,
+    )?;
 
     let (nla, tls, rdp) = match cfg.security {
         SecurityMode::Negotiate => (true, true, false),
@@ -668,6 +682,8 @@ unsafe extern "C" fn on_channel_connected(
             (*disp).custom = ctx.cast();
             (*disp).DisplayControlCaps = Some(disp_caps);
             state.disp.store(disp, Ordering::SeqCst);
+        } else if name.to_bytes_with_nul() == ffi::CLIPRDR_SVC_CHANNEL_NAME {
+            crate::cliprdr::attach(state, (*e).pInterface.cast(), ctx);
         }
     }
 }
@@ -679,11 +695,14 @@ unsafe extern "C" fn on_channel_disconnected(
     // SAFETY: FreeRDP passes our context and valid event args.
     unsafe {
         let rctx = ctx as *mut ffi::rdpContext;
-        if let Some(state) = state(rctx)
-            && CStr::from_ptr((*e).name).to_bytes_with_nul() == ffi::DISP_DVC_CHANNEL_NAME
-        {
-            state.disp_ready.store(false, Ordering::SeqCst);
-            state.disp.store(ptr::null_mut(), Ordering::SeqCst);
+        if let Some(state) = state(rctx) {
+            let name = CStr::from_ptr((*e).name).to_bytes_with_nul();
+            if name == ffi::DISP_DVC_CHANNEL_NAME {
+                state.disp_ready.store(false, Ordering::SeqCst);
+                state.disp.store(ptr::null_mut(), Ordering::SeqCst);
+            } else if name == ffi::CLIPRDR_SVC_CHANNEL_NAME {
+                crate::cliprdr::detach(state);
+            }
         }
         ffi::freerdp_client_OnChannelDisconnectedEventHandler(ctx, e);
     }

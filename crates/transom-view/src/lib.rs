@@ -11,6 +11,7 @@
 //! # }
 //! ```
 
+mod clipboard;
 mod tiles;
 mod view;
 

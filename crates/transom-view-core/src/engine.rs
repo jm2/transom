@@ -12,6 +12,7 @@ use std::time::Duration;
 
 use secrecy::SecretString;
 
+use crate::clipboard::ClipFormat;
 use crate::config::SessionConfig;
 use crate::geometry::{DesktopRequest, ScaleFactors, Size};
 use crate::trust::CertInfo;
@@ -210,6 +211,16 @@ pub enum EngineEvent {
     },
     /// Display Control channel became available: dynamic resize now possible.
     ResizeAvailable,
+    /// The remote clipboard changed; these formats are available (may be empty).
+    ClipboardRemoteFormats(Vec<ClipFormat>),
+    /// Reply to [`EngineCommand::ClipboardRequest`]; `None` if the remote failed.
+    ClipboardRemoteData {
+        format: ClipFormat,
+        data: Option<Vec<u8>>,
+    },
+    /// The remote wants our clipboard content in `format`. Answer with
+    /// [`EngineCommand::ClipboardReply`] (always, even on failure).
+    ClipboardDataRequest(ClipFormat),
     Disconnected(DisconnectReason),
 }
 
@@ -280,6 +291,15 @@ pub enum EngineCommand {
     Input(InputEvent),
     /// Send the secure attention sequence.
     CtrlAltDel,
+    /// The local clipboard changed; announce these formats to the remote.
+    ClipboardLocalFormats(Vec<ClipFormat>),
+    /// Fetch remote clipboard content (answered by `ClipboardRemoteData`).
+    ClipboardRequest(ClipFormat),
+    /// Answer a `ClipboardDataRequest`; `None` reports failure.
+    ClipboardReply {
+        format: ClipFormat,
+        data: Option<Vec<u8>>,
+    },
     Disconnect,
 }
 
