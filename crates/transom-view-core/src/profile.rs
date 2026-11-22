@@ -57,6 +57,9 @@ pub struct Profile {
     pub multimon: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gateway: Option<Gateway>,
+    /// Local devices offered to the remote (Phase 4b).
+    #[serde(skip_serializing_if = "crate::devices::Redirections::is_empty")]
+    pub redirections: crate::devices::Redirections,
     /// `.rdp` settings Transom doesn't model, kept for export (`key` → `type:value`).
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub rdp_extra: BTreeMap<String, String>,
@@ -81,6 +84,7 @@ impl Default for Profile {
             kerberos: false,
             multimon: false,
             gateway: None,
+            redirections: Default::default(),
             rdp_extra: BTreeMap::new(),
         }
     }
@@ -287,6 +291,7 @@ impl Profile {
             initial: desktop_request(self.scale, LogicalSize::new(1024.0, 768.0), 1.0),
             monitors: Vec::new(),
             video_decode: Default::default(),
+            redirections: self.redirections.clone(),
             gateway: self
                 .gateway
                 .as_ref()

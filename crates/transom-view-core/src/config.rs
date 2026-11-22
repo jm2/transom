@@ -94,6 +94,9 @@ pub struct SessionConfig {
     pub gateway: Option<GatewayConfig>,
     /// H.264 decoding: hardware to dmabufs where available (ADR 0006).
     pub video_decode: crate::video::VideoDecode,
+    /// Local devices offered to the session (drives, smart cards, printers, serial
+    /// ports, USB). The server decides what it accepts.
+    pub redirections: crate::devices::Redirections,
 }
 
 /// RD Gateway to connect through. The gateway's TLS certificate goes through the same

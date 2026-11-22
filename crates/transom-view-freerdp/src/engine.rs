@@ -742,6 +742,8 @@ unsafe fn apply_settings(
         ffi::FreeRDP_RedirectClipboard,
         cfg.clipboard != transom_view_core::config::ClipboardMode::Off,
     )?;
+    // SAFETY: `s` is valid and not yet connected.
+    unsafe { add_devices(s, &cfg.redirections)? };
 
     let (nla, tls, rdp) = match cfg.security {
         SecurityMode::Negotiate => (true, true, false),
@@ -1011,6 +1013,85 @@ unsafe fn send_layout(disp: *mut ffi::DispClientContext, layout: &[RemoteMonitor
             tracing::debug!(?layout, rc, "sent monitor layout");
         }
     }
+}
+
+/// Add the device channels for `r` (PLAN Phase 4b). Devices that can't be offered
+/// (a missing folder, a bad port name) are logged and left out; the server decides
+/// about the rest and refusals don't fail the connection.
+///
+/// # Safety
+/// `s` must be the settings of a context that is not yet connected.
+unsafe fn add_devices(
+    s: *mut ffi::rdpSettings,
+    r: &transom_view_core::devices::Redirections,
+) -> Result<(), String> {
+    use transom_view_core::devices::{UsbSelector, usable};
+    let (r, problems) = usable(r);
+    for p in problems {
+        tracing::warn!("not redirecting: {p}");
+    }
+    let add = |dynamic: bool, args: &[&str]| -> Result<(), String> {
+        let c: Vec<CString> = args
+            .iter()
+            .map(|a| CString::new(*a).map_err(|_| "device argument contains NUL".to_string()))
+            .collect::<Result<_, _>>()?;
+        let ptrs: Vec<*const std::ffi::c_char> = c.iter().map(|a| a.as_ptr()).collect();
+        // SAFETY: valid settings; FreeRDP copies the arguments.
+        let ok = unsafe {
+            if dynamic {
+                ffi::freerdp_client_add_dynamic_channel(s, ptrs.len(), ptrs.as_ptr())
+            } else {
+                ffi::freerdp_client_add_device_channel(s, ptrs.len(), ptrs.as_ptr())
+            }
+        } != 0;
+        ok.then_some(())
+            .ok_or_else(|| format!("adding device channel {} failed", args[0]))
+    };
+    let set = |key: ffi::FreeRDP_Settings_Keys_Bool, v: bool| -> Result<(), String> {
+        // SAFETY: valid settings.
+        let ok = unsafe { ffi::freerdp_settings_set_bool(s, key, v as ffi::BOOL) } != 0;
+        ok.then_some(())
+            .ok_or_else(|| format!("setting bool key {key} failed"))
+    };
+    let mut any = false;
+    for d in &r.drives {
+        let path = d.path.to_str().ok_or("drive path is not UTF-8")?;
+        add(false, &["drive", &d.name, path])?;
+        set(ffi::FreeRDP_RedirectDrives, true)?;
+        any = true;
+    }
+    if r.smartcards {
+        add(false, &["smartcard"])?;
+        set(ffi::FreeRDP_RedirectSmartCards, true)?;
+        any = true;
+    }
+    if r.printers {
+        add(false, &["printer"])?;
+        set(ffi::FreeRDP_RedirectPrinters, true)?;
+        any = true;
+    }
+    for p in &r.serial_ports {
+        let path = p.path.to_str().ok_or("serial port path is not UTF-8")?;
+        add(false, &["serial", &p.name, path])?;
+        set(ffi::FreeRDP_RedirectSerialPorts, true)?;
+        any = true;
+    }
+    if any {
+        set(ffi::FreeRDP_DeviceRedirection, true)?;
+    }
+    if !r.usb.is_empty() {
+        // One URBDRC channel; devices by vendor:product (hex, '#'-separated), which
+        // also picks up matching devices plugged in during the session.
+        let ids: Vec<String> = r
+            .usb
+            .iter()
+            .map(|u| match u {
+                UsbSelector::VidPid { vid, pid } => format!("{vid:04x}:{pid:04x}"),
+            })
+            .collect();
+        add(true, &["urbdrc", &format!("id:{}", ids.join("#"))])?;
+    }
+    Ok(())
 }
 
 /// Whether FreeRDP has the MS-RDPEAR (authentication redirection) client channel,

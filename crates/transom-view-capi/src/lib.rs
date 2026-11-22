@@ -117,6 +117,7 @@ pub unsafe extern "C" fn transom_view_connect_to(
         monitors: Vec::new(),
         gateway: None,
         video_decode: Default::default(),
+        redirections: Default::default(),
     };
     let engine = FreeRdpEngine::new(glib::user_cache_dir().join("transom-view").join("freerdp"));
     match v.connect_session(&engine, config) {

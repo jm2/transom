@@ -89,3 +89,11 @@ Hardware H.264 (ADR 0006) needs each of these, and falls back to software otherw
 - **A server that sends AVC420.** Windows uses AVC420 only for regions it detects as
   video. Its whole-desktop H.264 is AVC444, which is decoded in software. xrdp sends
   AVC420.
+
+## Serial ports: Windows accepts the redirected port but doesn't expose it
+
+`scripts/devices-check.sh` redirects a pty as COM9. FreeRDP announces it, and both
+Windows 11 25H2 and Server 2025 accept it (device reply status 0). But no application
+in the session can open it: `mode COM9` says "Device COM9 is not currently available",
+and no open request ever reaches the client. Drives and printers on the same channel
+work. Not yet compared with mstsc and a physical COM port.

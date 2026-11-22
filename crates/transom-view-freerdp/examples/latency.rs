@@ -77,6 +77,7 @@ fn main() -> ExitCode {
         monitors: Vec::new(),
         gateway: None,
         video_decode: Default::default(),
+        redirections: Default::default(),
     };
     let (tx, rx) = mpsc::channel();
     let engine = FreeRdpEngine::new(std::env::temp_dir().join("transom-latency-freerdp"));

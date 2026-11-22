@@ -3,6 +3,7 @@
 
 mod app;
 mod dev;
+mod devices_ui;
 mod dialogs;
 mod secrets;
 mod session;

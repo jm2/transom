@@ -119,6 +119,7 @@ fn main() -> ExitCode {
         monitors: Vec::new(),
         gateway: None,
         video_decode: Default::default(),
+        redirections: Default::default(),
     };
     let login_pw = read_pw(&lpf);
     let (tx, rx) = mpsc::channel();

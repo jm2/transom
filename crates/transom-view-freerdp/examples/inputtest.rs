@@ -196,6 +196,7 @@ fn main() -> ExitCode {
         monitors: Vec::new(),
         gateway: None,
         video_decode: Default::default(),
+        redirections: Default::default(),
     };
     let dir = std::env::temp_dir().join("transom-inputtest-freerdp");
     let (tx, rx) = mpsc::channel();

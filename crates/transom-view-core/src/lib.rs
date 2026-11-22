@@ -6,6 +6,7 @@
 
 pub mod clipboard;
 pub mod config;
+pub mod devices;
 pub mod engine;
 pub mod fsutil;
 pub mod geometry;

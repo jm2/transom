@@ -58,6 +58,7 @@ struct Args {
     check_after_explicit: bool,
     check_psnr: Option<f64>,
     video_decode: transom_view_core::video::VideoDecode,
+    redirections: transom_view_core::devices::Redirections,
     quit_after_ms: Option<u64>,
     clip_test: bool,
     file_clip_test: bool,
@@ -89,6 +90,7 @@ fn parse() -> Result<Args, String> {
         check_after_explicit: false,
         check_psnr: None,
         video_decode: Default::default(),
+        redirections: Default::default(),
         quit_after_ms: None,
         clip_test: false,
         file_clip_test: false,
@@ -139,6 +141,42 @@ fn parse() -> Result<Args, String> {
                 a.check_after_explicit = true;
             }
             "--check-psnr" => a.check_psnr = Some(val()?.parse().map_err(|_| "bad dB")?),
+            "--drive" => {
+                // NAME=PATH
+                let v = val()?;
+                let (n, p) = v.split_once('=').ok_or("--drive NAME=PATH")?;
+                a.redirections
+                    .drives
+                    .push(transom_view_core::devices::DriveShare {
+                        name: transom_view_core::devices::drive_name(n),
+                        path: p.into(),
+                    });
+            }
+            "--serial" => {
+                // COMn=DEVICE
+                let v = val()?;
+                let (n, p) = v.split_once('=').ok_or("--serial COMn=DEVICE")?;
+                a.redirections
+                    .serial_ports
+                    .push(transom_view_core::devices::SerialPort {
+                        name: n.into(),
+                        path: p.into(),
+                    });
+            }
+            "--smartcards" => a.redirections.smartcards = true,
+            "--printers" => a.redirections.printers = true,
+            "--usb" => {
+                // VID:PID (hex)
+                let v = val()?;
+                let (vi, pi) = v.split_once(':').ok_or("--usb VID:PID")?;
+                let hex = |s: &str| u16::from_str_radix(s, 16).map_err(|_| "--usb VID:PID (hex)");
+                a.redirections
+                    .usb
+                    .push(transom_view_core::devices::UsbSelector::VidPid {
+                        vid: hex(vi)?,
+                        pid: hex(pi)?,
+                    });
+            }
             "--video-decode" => {
                 use transom_view_core::video::VideoDecode;
                 a.video_decode = match val()?.as_str() {
@@ -275,6 +313,7 @@ fn build(app: &gtk::Application, args: Args, code: Rc<Cell<u8>>) {
         monitors: Vec::new(),
         gateway: None,
         video_decode: args.video_decode,
+        redirections: args.redirections.clone(),
     };
 
     let app_weak = app.downgrade();
@@ -928,6 +967,7 @@ fn build_multimon(app: &gtk::Application, args: Args, code: Rc<Cell<u8>>) {
         monitors: layout.clone(),
         gateway: None,
         video_decode: args.video_decode,
+        redirections: args.redirections.clone(),
     };
     leader.connect_desktop_resized(|_, w, h| eprintln!("desktop resized: {w}x{h}"));
     let app2 = app.clone();

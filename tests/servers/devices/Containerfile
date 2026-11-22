@@ -1,0 +1,11 @@
+# Client-side device test image (Phase 4b, scripts/devices-check.sh): the view-check
+# image plus a throwaway CUPS with one PDF printer, socat for a serial-port pty, and
+# PC/SC with a virtual smart card. Nothing here touches the host's printers or cards.
+FROM localhost/transom-test-grd
+USER root
+RUN dnf install -y --setopt=install_weak_deps=False \
+        cups cups-client cups-pdf ghostscript socat poppler-utils libasan \
+        pcsc-lite \
+    && dnf clean all
+COPY client.sh /client.sh
+ENTRYPOINT ["/client.sh"]

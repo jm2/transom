@@ -178,7 +178,7 @@ pub fn credentials(
 
 /// Profile editor outcome.
 pub enum EditorResult {
-    Saved(Profile),
+    Saved(Box<Profile>),
     Deleted(String),
 }
 
@@ -289,6 +289,8 @@ pub fn profile_editor(
         .build();
     devices.add(&mic);
     page.add(&devices);
+    let (local_devices, redirections) = crate::devices_ui::group(&profile.redirections);
+    page.add(&local_devices);
 
     let security = adw::PreferencesGroup::builder().title("Security").build();
     let sec = combo("Protocol Security", SECURITY_CHOICES, profile.security);
@@ -400,6 +402,7 @@ pub fn profile_editor(
             p.clipboard = CLIPBOARD_CHOICES[clip.selected() as usize % CLIPBOARD_CHOICES.len()].1;
             p.audio = AUDIO_CHOICES[audio.selected() as usize % AUDIO_CHOICES.len()].1;
             p.microphone = mic.is_active();
+            p.redirections = redirections.borrow().clone();
             p.gateway = split_host_port(&gw_host.text()).map(|(host, port)| Gateway {
                 host,
                 port: port.filter(|&p| p != GatewayConfig::DEFAULT_PORT),
@@ -412,7 +415,7 @@ pub fn profile_editor(
             } else {
                 CertPolicy::Verify
             };
-            d(EditorResult::Saved(p));
+            d(EditorResult::Saved(Box::new(p)));
             dialog.close();
         }
     ));

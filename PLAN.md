@@ -223,12 +223,17 @@ It never fails the connection. Probe what the server announced, not what we aske
 for, and test refusals as well as success.
 - [ ] Capability reporting: per-session list of the redirections the server accepted or
       refused (static/dynamic channel open results), shown in the session info popover.
-- [ ] Drives (MS-RDPEFS): user-chosen folders, read-only option, via the file chooser portal.
+- [x] Drives (MS-RDPEFS): user-chosen folders via the file chooser (portal-friendly);
+      `scripts/devices-check.sh` reads and writes `\\tsclient\transom` on Windows 11, and a
+      server-side refusal leaves the session and other devices working. Read-only: not
+      supported by FreeRDP's drive channel.
 - [ ] Smart cards (MS-RDPESC) via PC/SC (pcsc-lite; macOS CryptoTokenKit and Windows
       WinSCard both expose PC/SC). Test: virtual card (vsmartcard/virt_cacard) vs Windows.
-- [ ] Printers (MS-RDPEPC): local printers through CUPS (and the print portal in Flatpak),
-      Microsoft driver name configurable, Easy Print fallback.
-- [ ] Serial/parallel ports (MS-RDPEFS): explicit device paths only.
+- [x] Printers (MS-RDPEPC): all local CUPS printers; devices-check prints from Windows to a
+      throwaway CUPS-PDF printer and finds the text in the PDF. (Print portal for Flatpak:
+      todo.)
+- [~] Serial ports (MS-RDPEFS): explicit device paths (config/.rdp only); Windows accepts
+      the port but doesn't expose it (docs/known-issues.md).
 - [ ] Media Transfer Protocol (MTP) and Picture Transfer Protocol (PTP) devices
       (MS-RDPEPNP): FreeRDP has no client, so it would be our own channel. Lowest priority.
 - [ ] Generic USB (MS-RDPEUSB / URBDRC, FreeRDP's libusb backend): device picker with
