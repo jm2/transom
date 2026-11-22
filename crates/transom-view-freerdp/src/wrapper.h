@@ -4,6 +4,7 @@
 #include <winpr/synch.h>
 #include <winpr/handle.h>
 #include <freerdp/freerdp.h>
+#include <freerdp/addin.h>
 #include <freerdp/client.h>
 #include <freerdp/channels/channels.h>
 #include <freerdp/client/channels.h>

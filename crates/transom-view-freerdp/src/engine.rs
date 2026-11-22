@@ -8,7 +8,7 @@
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::path::PathBuf;
 use std::ptr;
-use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -152,7 +152,8 @@ pub(crate) struct State {
     disp_ready: AtomicBool,
     waker: Arc<FreeRdpWaker>,
     config: SessionConfig,
-    auth_attempts: AtomicU32,
+    /// Kerberos: whether the ticket cache was already tried for the server / gateway.
+    kerberos_tried: [AtomicBool; 2],
     cert_rejected: AtomicBool,
     auth_cancelled: AtomicBool,
     pub(crate) clip: crate::cliprdr::ClipState,
@@ -271,7 +272,7 @@ fn run(
         disp_ready: AtomicBool::new(false),
         waker: waker.clone(),
         config,
-        auth_attempts: AtomicU32::new(0),
+        kerberos_tried: [AtomicBool::new(false), AtomicBool::new(false)],
         cert_rejected: AtomicBool::new(false),
         auth_cancelled: AtomicBool::new(false),
         clip: Default::default(),
@@ -339,7 +340,26 @@ unsafe fn connect_and_loop(
         }
         let instance = (*ctx).instance;
         tracing::info!(address = %state.config.address(), "connecting");
-        let reason = if ffi::freerdp_connect(instance) == 0 {
+        let mut connected = ffi::freerdp_connect(instance) != 0;
+        if !connected && rcg_refused(ctx, state) {
+            // Servers without Remote Credential Guard (gnome-remote-desktop, Windows
+            // hosts whose policy doesn't allow it) drop the connection at negotiation
+            // when it is requested. Connect again without it: NLA still uses the
+            // ticket, and Windows asks for the password on its logon screen.
+            tracing::info!("server refused Remote Credential Guard; connecting without it");
+            ffi::freerdp_client_stop(ctx);
+            let settings = (*ctx).settings;
+            ffi::freerdp_settings_set_bool(settings, ffi::FreeRDP_RemoteCredentialGuard, FALSE);
+            state
+                .kerberos_tried
+                .iter()
+                .for_each(|t| t.store(false, Ordering::SeqCst));
+            if ffi::freerdp_client_start(ctx) != 0 {
+                return DisconnectReason::Protocol("freerdp_client_start failed".into());
+            }
+            connected = ffi::freerdp_connect(instance) != 0;
+        }
+        let reason = if !connected {
             classify_error(ctx, state)
         } else {
             let r = event_loop(ctx, state, rx, waker);
@@ -455,6 +475,32 @@ unsafe fn event_loop(
 
 /// # Safety
 /// `ctx` must be valid.
+/// Whether a failed connect was the server refusing Remote Credential Guard: it was
+/// requested, and the connection failed at transport/negotiation level after reaching
+/// the server (not DNS, not unreachable, not a certificate or credential decision).
+///
+/// # Safety
+/// `ctx` must be a valid context.
+unsafe fn rcg_refused(ctx: *mut ffi::rdpContext, state: &State) -> bool {
+    // SAFETY: valid context and settings, per the contract; static strings.
+    let (rcg, name) = unsafe {
+        (
+            ffi::freerdp_settings_get_bool((*ctx).settings, ffi::FreeRDP_RemoteCredentialGuard)
+                != 0,
+            cstr_lossy(ffi::freerdp_get_last_error_name(
+                ffi::freerdp_get_last_error(ctx),
+            )),
+        )
+    };
+    rcg && !state.aborted()
+        && !state.cert_rejected.load(Ordering::SeqCst)
+        && !state.auth_cancelled.load(Ordering::SeqCst)
+        && ["TRANSPORT", "NEGO", "SECURITY"]
+            .iter()
+            .any(|k| name.contains(k))
+        && !["DNS", "CONNECT_FAILED"].iter().any(|k| name.contains(k))
+}
+
 unsafe fn classify_error(ctx: *mut ffi::rdpContext, state: &State) -> DisconnectReason {
     if state.aborted() {
         return DisconnectReason::Local;
@@ -610,6 +656,23 @@ unsafe fn apply_settings(
         set_u32(ffi::FreeRDP_DesktopHeight, cfg.initial.size.height)?;
         set_u32(ffi::FreeRDP_DesktopScaleFactor, cfg.initial.scale.desktop)?;
         set_u32(ffi::FreeRDP_DeviceScaleFactor, cfg.initial.scale.device)?;
+    }
+    // Ticket-only login to Windows: NLA authenticates with Kerberos, but Windows also
+    // needs a credential to log the user on interactively. Without a password that is
+    // Remote Credential Guard: the client delegates its ticket, and Windows sends later
+    // Kerberos operations back over MS-RDPEAR (FreeRDP loads that channel when this is
+    // set). FreeRDP builds without the channel (e.g. Fedora's) would get a session
+    // stuck at "The remote procedure call failed": there, connect without it and
+    // Windows shows its own logon screen instead.
+    if cfg.kerberos && cfg.password.is_none() {
+        if rdpear_available() {
+            set_bool(ffi::FreeRDP_RemoteCredentialGuard, true)?;
+        } else {
+            tracing::warn!(
+                "FreeRDP lacks the MS-RDPEAR channel: no Remote Credential Guard, so \
+                 Windows will ask for the password on its logon screen"
+            );
+        }
     }
     if let Some(gw) = &cfg.gateway {
         // RD Gateway: HTTP transport (with WebSocket upgrade when offered), falling
@@ -932,6 +995,25 @@ unsafe fn send_layout(disp: *mut ffi::DispClientContext, layout: &[RemoteMonitor
     }
 }
 
+/// Whether FreeRDP has the MS-RDPEAR (authentication redirection) client channel,
+/// built in or as a plugin. Upstream builds it only with `-DCHANNEL_RDPEAR=ON`.
+fn rdpear_available() -> bool {
+    static AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *AVAILABLE.get_or_init(|| {
+        // SAFETY: a lookup in FreeRDP's addin tables (and plugin directory); the name is
+        // a valid C string and the optional arguments may be null.
+        let entry = unsafe {
+            ffi::freerdp_load_channel_addin_entry(
+                c"rdpear".as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                ffi::FREERDP_ADDIN_CHANNEL_DYNAMIC,
+            )
+        };
+        entry.is_some()
+    })
+}
+
 unsafe extern "C" fn authenticate_ex(
     instance: *mut ffi::freerdp,
     username: *mut *mut c_char,
@@ -944,27 +1026,28 @@ unsafe extern "C" fn authenticate_ex(
         let Some(state) = state((*instance).context) else {
             return FALSE;
         };
-        let attempt = state.auth_attempts.fetch_add(1, Ordering::SeqCst) + 1;
-        // Kerberos single sign-on: answer the first request with empty credentials
-        // so NLA uses the ticket cache (FreeRDP: "empty credentials = proceed
-        // without"). Later requests mean the ticket didn't work: ask the user.
-        if state.config.kerberos && attempt == 1 {
+        let kind = match reason {
+            ffi::GW_AUTH_HTTP | ffi::GW_AUTH_RDG | ffi::GW_AUTH_RPC => AuthKind::Gateway,
+            _ => AuthKind::Server,
+        };
+        // Kerberos single sign-on: answer the first request of each kind (server, and
+        // the RD Gateway when there is one) with empty credentials so NLA uses the ticket
+        // cache (FreeRDP: "empty credentials = proceed without"). A second request of
+        // the same kind means the ticket didn't work: ask the user.
+        let slot = usize::from(kind == AuthKind::Gateway);
+        if state.config.kerberos && !state.kerberos_tried[slot].swap(true, Ordering::SeqCst) {
             let user = cstr_opt(*username)
                 .or_else(|| state.config.username.clone())
                 .unwrap_or_default();
             let dom = cstr_opt(*domain)
                 .or_else(|| state.config.domain.clone())
                 .unwrap_or_default();
-            tracing::info!("using the Kerberos ticket cache");
+            tracing::info!(?kind, "using the Kerberos ticket cache");
             let ok = replace_cstring(username, &user)
                 && replace_cstring(domain, &dom)
                 && replace_cstring(password, "");
             return if ok { TRUE } else { FALSE };
         }
-        let kind = match reason {
-            ffi::GW_AUTH_HTTP | ffi::GW_AUTH_RDG | ffi::GW_AUTH_RPC => AuthKind::Gateway,
-            _ => AuthKind::Server,
-        };
         let (tx, rx) = mpsc::sync_channel(1);
         state.emit(EngineEvent::AuthRequired(AuthRequest {
             kind,

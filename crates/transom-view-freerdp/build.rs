@@ -64,6 +64,7 @@ fn main() {
         .allowlist_var("FreeRDP_.*")
         .allowlist_var("VERIFY_CERT_FLAG_.*")
         .allowlist_var("FREERDP_VERSION_.*")
+        .allowlist_var("FREERDP_ADDIN_.*")
         .allowlist_var("DISPLAY_CONTROL_.*")
         .allowlist_var("ORIENTATION_.*")
         .allowlist_var("PTR_FLAGS_.*")
