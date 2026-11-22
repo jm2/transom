@@ -198,15 +198,47 @@ Each phase ends with its Definition of Done (DoD) demonstrated and logged in §1
 ### Phase 4 — Enterprise-shaped features (3–4 weeks)
 - [x] RD Gateway (HTTP/RPC-over-HTTP + WebSocket transport): `SessionConfig.gateway`, editor
       group, gateway credential prompt; `scripts/gateway-check.sh` connects to the Server 2025 VM
-      through its own RD Gateway (NTLM, HTTP transport; CAP/RAP events checked). Kerberos to a
-      domain gateway still needs an AD test domain (see DoD).
+      through its own RD Gateway (NTLM, HTTP transport; CAP/RAP events checked).
 - [x] Kerberos/NLA with the system Kerberos ccache (`scripts/kerberos-check.sh`: MIT KDC + grd,
       ticket-only login); smartcard passthrough (optional, not done).
 - [ ] RemoteApp (RAIL) windows as separate GTK windows (stretch).
 - [ ] Camera redirection (MS-RDPECAM) via PipeWire camera portal. *Blocked on test hardware:
       Fedora's FreeRDP client lacks RDPECAM, so it needs our own channel + H.264 encoding, and
       grd decodes camera streams on the GPU; verify against Windows 11 or a GPU host.*
-- **DoD:** connect through a Windows RD Gateway to a domain host using Kerberos.
+- **DoD:** connect through a Windows RD Gateway to a domain host using Kerberos. **Met
+      2026-11-22:** `scripts/ad-check.sh`. Test domain `transom.test` (`scripts/ad-setup.sh`:
+      Server 2025 DC + gateway, Windows 11 member, over a rootless VM-to-VM network). `kinit`,
+      then no password: gateway (HTTP Negotiate) and NLA both use Kerberos, and alice's
+      desktop session opens through Remote Credential Guard (MS-RDPEAR; needs a FreeRDP built
+      with the channel, as the Flatpak is; see docs/known-issues.md for the fallbacks).
+      Verified from the Windows side: DC ticket events, gateway events, Kerberos network logon
+      and interactive logon on the target.
+
+### Phase 4b — Device redirection
+Every device type is opt-in per profile and per device, with explicit consent (a
+remote host gets real hardware). Each one degrades gracefully: when the server refuses
+or disables a channel (policy, missing role, server type), Transom shows the device as
+"not available on this server" with the reason, and the session carries on without it.
+It never fails the connection. Probe what the server announced, not what we asked
+for, and test refusals as well as success.
+- [ ] Capability reporting: per-session list of the redirections the server accepted or
+      refused (static/dynamic channel open results), shown in the session info popover.
+- [ ] Drives (MS-RDPEFS): user-chosen folders, read-only option, via the file chooser portal.
+- [ ] Smart cards (MS-RDPESC) via PC/SC (pcsc-lite; macOS CryptoTokenKit and Windows
+      WinSCard both expose PC/SC). Test: virtual card (vsmartcard/virt_cacard) vs Windows.
+- [ ] Printers (MS-RDPEPC): local printers through CUPS (and the print portal in Flatpak),
+      Microsoft driver name configurable, Easy Print fallback.
+- [ ] Serial/parallel ports (MS-RDPEFS): explicit device paths only.
+- [ ] Media Transfer Protocol (MTP) and Picture Transfer Protocol (PTP) devices
+      (MS-RDPEPNP): FreeRDP has no client, so it would be our own channel. Lowest priority.
+- [ ] Generic USB (MS-RDPEUSB / URBDRC, FreeRDP's libusb backend): device picker with
+      hotplug, VID:PID allow/deny lists, never offer HID keyboards/mice or the device the
+      session is using. Requires udev access (document a uaccess rule; Flatpak needs
+      `--device=all`). Windows client: needs WinUSB bound to the device. macOS: only
+      devices without a kernel driver. Server side needs Windows 10/11 Pro+ or RDSH; on
+      refusal, fall back to the class channel above when one fits (drive, smartcard,
+      camera, audio). Test: a virtual USB device (dummy_hcd + configfs gadget, needs root
+      once) or a spare stick, against both VMs.
 
 ### Phase 5 — Library packaging for other consumers (1–2 weeks)
 - [x] `transom-view-capi`: stable C ABI, GObject type `TransomView`, GIR + VAPI generation,
@@ -278,3 +310,4 @@ Integration tests against a headless grd in a VM are optional, behind `--feature
 | 2026-11-21 | 1b | 1 | `TransomView` widget: tiled rendering in device px (ADR 0004), origin snapping, Display Control renegotiation (150 ms debounce), surface-scale tracking, keyboard (evdev/macOS scancode tables in core; Unicode fallback), mouse incl. back/forward, hi-res wheel, remote cursor via `Cursor::from_callback`, focus lock-sync and key release, clean `shutdown()`. Demo binary. `scripts/view-check.sh`: headless mutter + GSK render vs framebuffer: **pixel-exact at 100/125/150/166.7/200%, after window resize and after a 100→200% scale change** against grd 51. Found+fixed: texture-scale-node blur at 200%, fractional tile seams, half-covered-pixel request (§3.1 now floor), exit-time SIGSEGV. | Windows VM (needs SVM in BIOS) for the Windows half of Phase 0/1 DoD; cursor-size check; TOFU trust store; input tests; Windows keycode path. |
 | 2026-11-21 | 1c | 2 | Pins raised legacy-free to match Tributary/Balun: Rust 1.98 (ed. 2024), GTK 4.16 / adw 1.6, FreeRDP ≥ 3.15. Core: `.rdp` (UTF-16/UTF-8) + `rdp://` (both flavours), TOML profiles (one file each, atomic 0600), TOFU `TrustStore`. App v0.1: connection list + search + quick connect, profile editor, `.rdp` import, `rdp://`/`.rdp` open, tabs (detachable), fullscreen with hover-reveal header and system-shortcut inhibition, app shortcuts handed to the remote while a session is focused (Ctrl+Alt+Enter/Break fullscreen, Ctrl+Alt+End = CAD stay local), cert dialog (changed cert blocks by default), credentials dialog with libsecret “remember”, screenshot, reconnect. Desktop/MIME/metainfo validated; `scripts/install-local.sh`. Headless screenshots via `scripts/app-shot.sh` (empty, list, cert prompt, live 125% session). | Flatpak manifest + CI; xrdp container; grd remote-login container (redirection); input tests; Windows VM once SVM is on. |
 | 2026-11-21 | 1d | 3–6 | Licences: transom-view* Apache-2.0, app GPL-3.0-or-later. **Phase 3 done (non-Windows):** clipboard text/HTML/images/files (ADR 0005), audio out + mic, grd remote login with Server Redirection (systemd+GDM container), multi-monitor (per-monitor scale, follower views). Input verified end to end (engine + widget path). H.264 advertised when a decoder works. **Phase 4:** Kerberos SSO (KDC container). **Phase 5 done:** C API, GIR/typelib/VAPI, Python + Vala samples. **Phase 6:** AT-SPI a11y audit + Ctrl+Alt+Home focus escape; latency 26–30 ms median (loopback). Packaging: Flatpak (GNOME 51, smoke-tested), RPM + PKGBUILD (built in clean containers). Fixed: GIO mangling Microsoft rdp:// links, redirect false positive. Known server issues in docs/known-issues.md. | **VM/hardware:** Windows VM (SVM) for all Windows halves, RD Gateway, RemoteApp; camera (needs H.264 encode + GPU decode on grd, or Windows); dmabuf spike (hardware H.264); macOS/Windows builds (seams in ADR 0002: secrets, Windows keycodes). Optional: IronRDP, smartcard. |
+| 2026-11-22 | 1e | 4 | **Windows VMs** (Win11 25H2, Server 2025; KVM, rootless QEMU): view/resize/multimon pixel-exact, input, clipboard incl. files, audio, latency (31 ms) all pass against both; RD Gateway. **Phase 4 DoD met:** AD test domain + Kerberos SSO through the gateway to a domain member, desktop via Remote Credential Guard (RDPEAR), with fallbacks for FreeRDP without RDPEAR, hosts without the policy, and grd. Phase 4b (device redirection: class channels + generic USB) planned. | Zero-copy H.264 (VA-API H.264 decode now available: RX 6400 + mesa freeworld); Phase 4b; RemoteApp. |

@@ -52,3 +52,25 @@ but `waveInOpen` fails (`MMSYSERR_ERROR`) because the channel is never created.
 Checked: policy and RDP-Tcp `fDisableAudioCapture = 0`, Windows Audio running,
 Server-Media-Foundation installed, fresh session. Not yet compared with mstsc
 against the same server, so it may still be a server-side setting.
+
+## Kerberos to Windows: the interactive logon needs MS-RDPEAR
+
+With only a Kerberos ticket and no password, NLA authenticates fine, but Windows also
+needs a credential to log the user on to the desktop. Without a password, the only
+way to provide one is Remote Credential Guard: the client delegates its ticket, and
+Windows sends later Kerberos requests back over the MS-RDPEAR channel.
+- **FreeRDP builds without the channel (Fedora's, as of 3.33).** Upstream switches it off by
+  default (`-DCHANNEL_RDPEAR=ON`). Transom detects this and connects without Remote
+  Credential Guard: the session opens at Windows' logon screen, where the user can
+  sign in with a password. The Flatpak builds FreeRDP with the channel.
+  `scripts/build-freerdp-rdpear.sh` builds a matching library for the tests.
+- **Windows host policy.** The target must allow Remote Credential Guard
+  (`HKLM\System\CurrentControlSet\Control\Lsa\DisableRestrictedAdmin = 0`, or the GPO
+  "Remote host allows delegation of non-exportable credentials"). Microsoft's own
+  client needs the same setting. Otherwise Windows accepts the request and then shows
+  "Account restrictions are preventing this user from signing in" at its logon screen.
+  The user can still sign in there with a password.
+- **Servers that don't support it at all** (gnome-remote-desktop) drop the connection at
+  negotiation when Remote Credential Guard is requested. Transom retries once without it, and
+  Kerberos to grd then works as before (`scripts/kerberos-check.sh`, with both FreeRDP
+  builds).

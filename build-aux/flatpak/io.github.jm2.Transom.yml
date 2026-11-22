@@ -71,6 +71,10 @@ modules:
       - -DWITH_AAD=OFF
       - -DWITH_SSO_MIB=OFF
       - -DWITH_KRB5=ON
+      # Remote Credential Guard: ticket-only (Kerberos) interactive logon to Windows
+      # (MS-RDPEAR). Off by default upstream; scripts/ad-check.sh tests it.
+      - -DCHANNEL_RDPEAR=ON
+      - -DCHANNEL_RDPEAR_CLIENT=ON
       - -DCHANNEL_URBDRC=OFF
       - -DCHANNEL_RDPECAM_CLIENT=OFF
     cleanup:
