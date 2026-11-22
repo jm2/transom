@@ -39,7 +39,10 @@ try {
         Native { & "$root\rustup-init.exe" -y --profile minimal --default-host x86_64-pc-windows-msvc } 'rustup-init'
     }
     $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
-    Native { & rustup target add x86_64-pc-windows-gnullvm } 'rustup target'
+    # Build scripts run on the host: use the gnullvm host toolchain, which links with
+    # MSYS2's clang (the MSVC host needs Visual Studio, which this VM doesn't have).
+    Native { & rustup toolchain install stable-x86_64-pc-windows-gnullvm --profile minimal } 'rustup toolchain'
+    $env:RUSTUP_TOOLCHAIN = 'stable-x86_64-pc-windows-gnullvm'
 
     Log 'unpacking source'
     $src = "$root\src"

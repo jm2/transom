@@ -93,6 +93,7 @@ fn main() {
     for p in &include_paths {
         builder = builder.clang_arg(format!("-I{}", p.display()));
     }
+    builder = builder.clang_args(target_clang_args());
 
     let bindings = builder
         .generate()
@@ -160,10 +161,26 @@ fn hwdec_bindings() {
     for p in &include_paths {
         builder = builder.clang_arg(format!("-I{}", p.display()));
     }
+    builder = builder.clang_args(target_clang_args());
     let bindings = builder
         .generate()
         .expect("bindgen failed to generate libavcodec bindings");
     let out = PathBuf::from(env::var("OUT_DIR").unwrap()).join("av_bindings.rs");
     bindings.write_to_file(&out).expect("writing bindings");
     println!("cargo:rustc-cfg=transom_hwdec");
+}
+
+/// Clang arguments for the target. Rust's `*-pc-windows-gnullvm` triples have an
+/// environment clang doesn't know, so libclang wouldn't use the MinGW toolchain
+/// (and its sysroot include directory, e.g. MSYS2's `clang64/include`): give it the
+/// equivalent MinGW triple.
+fn target_clang_args() -> Vec<String> {
+    let target = env::var("TARGET").unwrap_or_default();
+    match target.as_str() {
+        t if t.ends_with("-pc-windows-gnullvm") || t.ends_with("-pc-windows-gnu") => {
+            let arch = t.split('-').next().unwrap_or("x86_64");
+            vec![format!("--target={arch}-w64-windows-gnu")]
+        }
+        _ => Vec::new(),
+    }
 }

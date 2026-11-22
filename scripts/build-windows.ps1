@@ -4,6 +4,9 @@
 # Builds with MSYS2's CLANG64 / CLANGARM64 GTK stack, like Tributary and Balun:
 #   pacman -S mingw-w64-clang-x86_64-{toolchain,gtk4,libadwaita,freerdp,ffmpeg,pkg-config,clang}
 #   rustup target add x86_64-pc-windows-gnullvm   (aarch64-pc-windows-gnullvm on ARM)
+# Build scripts run on the host: either Visual Studio's C++ tools (MSVC host, as on
+# GitHub's runners) or the gnullvm host toolchain
+# (rustup toolchain install stable-x86_64-pc-windows-gnullvm; RUSTUP_TOOLCHAIN=…).
 #
 #   pwsh scripts/build-windows.ps1 [-Msys2Root C:\msys64] [-NoCargoBuild] [-InnoSetup]
 #
