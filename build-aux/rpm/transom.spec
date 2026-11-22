@@ -51,7 +51,9 @@ install -Dm755 target/release/transom %{buildroot}%{_bindir}/transom
 install -Dm644 data/io.github.jm2.Transom.desktop %{buildroot}%{_datadir}/applications/io.github.jm2.Transom.desktop
 install -Dm644 data/io.github.jm2.Transom.metainfo.xml %{buildroot}%{_metainfodir}/io.github.jm2.Transom.metainfo.xml
 install -Dm644 data/io.github.jm2.Transom.mime.xml %{buildroot}%{_datadir}/mime/packages/io.github.jm2.Transom.xml
-install -Dm644 data/icons/hicolor/scalable/apps/io.github.jm2.Transom.svg %{buildroot}%{_datadir}/icons/hicolor/scalable/apps/io.github.jm2.Transom.svg
+for icon in data/icons/hicolor/*/apps/io.github.jm2.Transom.*; do
+    install -Dm644 "$icon" "%{buildroot}%{_datadir}/${icon#data/}"
+done
 
 %check
 desktop-file-validate %{buildroot}%{_datadir}/applications/io.github.jm2.Transom.desktop
@@ -65,7 +67,7 @@ cargo test --release --locked --offline -p transom-view-core
 %{_datadir}/applications/io.github.jm2.Transom.desktop
 %{_metainfodir}/io.github.jm2.Transom.metainfo.xml
 %{_datadir}/mime/packages/io.github.jm2.Transom.xml
-%{_datadir}/icons/hicolor/scalable/apps/io.github.jm2.Transom.svg
+%{_datadir}/icons/hicolor/*/apps/io.github.jm2.Transom.*
 
 %changelog
 * Sat Nov 21 2026 Transom Contributors - 0.0.1-1

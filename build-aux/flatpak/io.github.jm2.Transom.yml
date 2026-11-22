@@ -99,7 +99,7 @@ modules:
       - install -Dm644 data/io.github.jm2.Transom.desktop /app/share/applications/io.github.jm2.Transom.desktop
       - install -Dm644 data/io.github.jm2.Transom.metainfo.xml /app/share/metainfo/io.github.jm2.Transom.metainfo.xml
       - install -Dm644 data/io.github.jm2.Transom.mime.xml /app/share/mime/packages/io.github.jm2.Transom.xml
-      - install -Dm644 data/icons/hicolor/scalable/apps/io.github.jm2.Transom.svg /app/share/icons/hicolor/scalable/apps/io.github.jm2.Transom.svg
+      - for icon in data/icons/hicolor/*/apps/io.github.jm2.Transom.*; do install -Dm644 "$icon" "/app/share/${icon#data/}"; done
     sources:
       - type: dir
         path: ../..

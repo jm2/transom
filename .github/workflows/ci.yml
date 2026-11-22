@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -22,7 +25,7 @@ jobs:
           freerdp-devel libwinpr-devel gtk4-devel libadwaita-devel libsecret-devel
           libavcodec-free-devel libavutil-free-devel
           gobject-introspection-devel vala mutter dbus-daemon
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install Rust
         run: |
           rustup-init -y --profile minimal --component rustfmt,clippy
@@ -44,27 +47,131 @@ jobs:
       image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-51
       options: --privileged
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Vendored cargo sources match Cargo.lock
         run: python3 build-aux/flatpak/cargo-sources.py Cargo.lock | diff -u build-aux/flatpak/cargo-sources.json -
-      - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+      - uses: flatpak/flatpak-github-actions/flatpak-builder@79327416609af08178ad73b352877e51450790b3 # v6.8
         with:
           bundle: transom.flatpak
           manifest-path: build-aux/flatpak/io.github.jm2.Transom.yml
           cache-key: flatpak-builder-${{ hashFiles('build-aux/flatpak/*', 'Cargo.lock') }}
 
-  core:
-    name: transom-view-core (${{ matrix.os }})
+  # ── macOS (.app/.dmg, Homebrew GTK + FreeRDP), as Tributary/Balun ──────────
+  build-macos:
+    name: macOS (aarch64)
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install system dependencies (Homebrew)
+        run: |
+          brew update
+          brew install gtk4 libadwaita freerdp ffmpeg adwaita-icon-theme pkg-config llvm create-dmg
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+          targets: aarch64-apple-darwin
+          components: clippy, rustfmt
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: macos-26-aarch64-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: macos-26-aarch64-cargo-
+      - name: Clippy, build and test (whole workspace)
+        run: |
+          BREW="$(brew --prefix)"
+          export PKG_CONFIG_PATH="$BREW/lib/pkgconfig" LIBCLANG_PATH="$BREW/opt/llvm/lib"
+          cargo clippy --workspace --all-targets --target aarch64-apple-darwin -- -D warnings
+          cargo build --release --locked --target aarch64-apple-darwin -p transom
+          cargo test --workspace --target aarch64-apple-darwin
+      - name: Create .app bundle and .dmg
+        env:
+          CARGO_BUILD_TARGET: aarch64-apple-darwin
+        run: scripts/build-macos.sh --dmg --no-build
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: transom-macos-aarch64
+          path: dist/Transom.dmg
+          if-no-files-found: error
+
+  # ── Windows (.zip DLL bundle, MSYS2 CLANG64/CLANGARM64), as Tributary/Balun ─
+  build-windows:
+    name: Windows (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+        include:
+          - arch: x86_64
+            runner: windows-2025
+            msystem: CLANG64
+            pkg_prefix: mingw-w64-clang-x86_64
+            rust_target: x86_64-pc-windows-gnullvm
+            msys_env: clang64
+          - arch: aarch64
+            runner: windows-11-arm
+            msystem: CLANGARM64
+            pkg_prefix: mingw-w64-clang-aarch64
+            rust_target: aarch64-pc-windows-gnullvm
+            msys_env: clangarm64
+    defaults:
+      run:
+        shell: msys2 {0}
     steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          components: rustfmt, clippy
-      - name: Verify core
-        shell: bash
-        run: scripts/verify.sh --core
+          persist-credentials: false
+      - uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2.33.0
+        env:
+          __SETUP_MSYS2_USE_MAIN_MIRROR_ONLY: 'true'
+        with:
+          msystem: ${{ matrix.msystem }}
+          path-type: inherit
+          update: true
+          cache: ${{ matrix.arch != 'aarch64' }}
+          install: >-
+            ${{ matrix.pkg_prefix }}-gtk4
+            ${{ matrix.pkg_prefix }}-libadwaita
+            ${{ matrix.pkg_prefix }}-freerdp
+            ${{ matrix.pkg_prefix }}-ffmpeg
+            ${{ matrix.pkg_prefix }}-adwaita-icon-theme
+            ${{ matrix.pkg_prefix }}-pkg-config
+            ${{ matrix.pkg_prefix }}-clang
+            ${{ matrix.pkg_prefix }}-toolchain
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+          targets: ${{ matrix.rust_target }}
+          components: clippy, rustfmt
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: windows-${{ matrix.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: windows-${{ matrix.arch }}-cargo-
+      - name: Clippy, build and test (whole workspace)
+        run: |
+          export PKG_CONFIG_ALLOW_CROSS=1 PKG_CONFIG_PATH="/${{ matrix.msys_env }}/lib/pkgconfig"
+          export LIBCLANG_PATH="$(cygpath -w /${{ matrix.msys_env }}/bin)"
+          cargo clippy --workspace --all-targets --target ${{ matrix.rust_target }} -- -D warnings
+          cargo build --release --locked --target ${{ matrix.rust_target }} -p transom
+          cargo test --workspace --target ${{ matrix.rust_target }}
+      - name: Bundle DLLs and create zip
+        env:
+          RUST_TARGET: ${{ matrix.rust_target }}
+          MSYS_ENV: ${{ matrix.msys_env }}
+        run: pwsh -File scripts/build-windows.ps1 -Msys2Root "$(cygpath -w /)" -NoCargoBuild
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: transom-windows-${{ matrix.arch }}
+          path: dist/transom-windows.zip
+          if-no-files-found: error

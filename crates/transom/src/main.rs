@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Transom: a focused, HiDPI-correct RDP client.
+// No console window behind the app on Windows (release builds).
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
 mod dev;

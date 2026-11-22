@@ -12,6 +12,8 @@ optdepends=('libva-mesa-driver: hardware H.264 decoding on AMD (zero-copy video)
             'intel-media-driver: hardware H.264 decoding on Intel (zero-copy video)'
             'vulkan-icd-loader: GTK''s Vulkan renderer, needed to show hardware-decoded video')
 makedepends=(cargo clang)
+# The release profile already strips; makepkg's LTO and debug split stay off.
+options=('!lto' '!debug')
 source=("$pkgname-$pkgver.tar.gz" "$pkgname-$pkgver-vendor.tar.xz")
 sha256sums=(SKIP SKIP)
 
@@ -38,7 +40,9 @@ package() {
   install -Dm644 data/io.github.jm2.Transom.desktop "$pkgdir/usr/share/applications/io.github.jm2.Transom.desktop"
   install -Dm644 data/io.github.jm2.Transom.metainfo.xml "$pkgdir/usr/share/metainfo/io.github.jm2.Transom.metainfo.xml"
   install -Dm644 data/io.github.jm2.Transom.mime.xml "$pkgdir/usr/share/mime/packages/io.github.jm2.Transom.xml"
-  install -Dm644 data/icons/hicolor/scalable/apps/io.github.jm2.Transom.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/io.github.jm2.Transom.svg"
+  for icon in data/icons/hicolor/*/apps/io.github.jm2.Transom.*; do
+    install -Dm644 "$icon" "$pkgdir/usr/share/${icon#data/}"
+  done
   install -Dm644 COPYING "$pkgdir/usr/share/licenses/$pkgname/COPYING"
   install -Dm644 LICENSE-APACHE "$pkgdir/usr/share/licenses/$pkgname/LICENSE-APACHE"
 }

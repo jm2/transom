@@ -1,0 +1,20 @@
+Transom bundles the following third-party components in its macOS and Windows
+packages (Linux packages use the system's copies). Their licences apply to them;
+Transom itself is GPL-3.0-or-later and the transom-view libraries Apache-2.0.
+
+- GTK 4, GLib, Pango, Cairo, HarfBuzz, GDK-Pixbuf, libadwaita, librsvg:
+  LGPL-2.1-or-later (HarfBuzz: MIT; Cairo: LGPL-2.1 or MPL-1.1)
+- FreeRDP and WinPR 3 (https://www.freerdp.com): Apache-2.0
+- FFmpeg libavcodec/libavutil (https://ffmpeg.org): LGPL-2.1-or-later, dynamically
+  linked; the bundled build's configuration determines the exact licence
+- OpenSSL 3: Apache-2.0
+- libusb: LGPL-2.1-or-later
+- Adwaita icon theme: LGPL-3.0 or CC-BY-SA-3.0
+- Rust crates compiled into transom: see the licence list produced by
+  `cargo deny list` / the crates' own LICENSE files (MIT, Apache-2.0, and others
+  allowed by deny.toml)
+
+Source code for the LGPL components is available from the projects above, or
+from the MSYS2 (Windows) and Homebrew (macOS) package sources the bundle was
+built from; on request the exact versions used are listed in the bundle's
+build log.

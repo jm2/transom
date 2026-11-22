@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Password storage in the OS secret store (ADR 0002): libsecret on Linux. macOS
-//! (Keychain) and Windows (Credential Manager) are not implemented yet; there,
-//! passwords are simply not remembered.
+//! Password storage in the OS secret store (ADR 0002): libsecret on Linux (the
+//! Secret Service, or its portal in Flatpak), Keychain on macOS and Credential
+//! Manager on Windows (keyring-core's native stores, as in Tributary).
 
 use transom_view::core::secrecy::SecretString;
 
@@ -60,7 +60,81 @@ mod imp {
     pub const AVAILABLE: bool = true;
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+mod imp {
+    use std::sync::Arc;
+
+    use transom_view::core::secrecy::{ExposeSecret, SecretString};
+
+    const SERVICE: &str = "io.github.jm2.Transom";
+
+    fn store() -> Result<Arc<keyring_core::CredentialStore>, String> {
+        // Built per operation, so a store that failed to open can be retried.
+        #[cfg(target_os = "macos")]
+        let s: Arc<keyring_core::CredentialStore> =
+            apple_native_keyring_store::keychain::Store::new().map_err(|e| e.to_string())?;
+        #[cfg(target_os = "windows")]
+        let s: Arc<keyring_core::CredentialStore> =
+            windows_native_keyring_store::Store::new().map_err(|e| e.to_string())?;
+        Ok(s)
+    }
+
+    fn entry(profile_id: &str) -> Result<keyring_core::Entry, String> {
+        store()?
+            .build(SERVICE, profile_id, None)
+            .map_err(|e| e.to_string())
+    }
+
+    /// Keychain/Credential Manager calls block (and may show a system prompt):
+    /// run them off the GTK main thread.
+    async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Option<T> {
+        gtk::gio::spawn_blocking(f).await.ok()
+    }
+
+    pub async fn lookup(profile_id: &str) -> Option<SecretString> {
+        let id = profile_id.to_string();
+        let r = blocking(move || entry(&id)?.get_password().map_err(|e| e.to_string())).await?;
+        match r {
+            Ok(p) => Some(SecretString::from(p)),
+            Err(e) => {
+                tracing::debug!("no stored password: {e}");
+                None
+            }
+        }
+    }
+
+    pub async fn store(
+        profile_id: &str,
+        _label: &str,
+        password: &SecretString,
+    ) -> Result<(), String> {
+        let id = profile_id.to_string();
+        let pw = SecretString::from(password.expose_secret().to_string());
+        blocking(move || {
+            entry(&id)?
+                .set_password(pw.expose_secret())
+                .map_err(|e| e.to_string())
+        })
+        .await
+        .unwrap_or_else(|| Err("password storage task failed".into()))
+    }
+
+    pub async fn clear(profile_id: &str) {
+        let id = profile_id.to_string();
+        let r = blocking(move || match entry(&id)?.delete_credential() {
+            Ok(()) | Err(keyring_core::Error::NoEntry) => Ok(()),
+            Err(e) => Err(e.to_string()),
+        })
+        .await;
+        if let Some(Err(e)) = r {
+            tracing::warn!("secret clear failed: {e}");
+        }
+    }
+
+    pub const AVAILABLE: bool = true;
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 mod imp {
     use transom_view::core::secrecy::SecretString;
 
@@ -69,7 +143,7 @@ mod imp {
     }
 
     pub async fn store(_: &str, _: &str, _: &SecretString) -> Result<(), String> {
-        Err("saving passwords isn't supported on this platform yet".into())
+        Err("saving passwords isn't supported on this platform".into())
     }
 
     pub async fn clear(_profile_id: &str) {}

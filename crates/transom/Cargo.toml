@@ -21,5 +21,76 @@ tracing-subscriber = { version = "0.3", default-features = false, features = ["e
 # libsecret: password storage on Linux (Secret Service; works in Flatpak via the portal).
 libsecret = "0.9"
 
+# keyring-core + native stores: passwords in Keychain (macOS) and Credential Manager
+# (Windows), the same crates Tributary uses.
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+keyring-core = "1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+apple-native-keyring-store = { version = "1", features = ["keychain"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-native-keyring-store = "1.1"
+
+[target.'cfg(target_os = "windows")'.build-dependencies]
+# Windows icon and version resource on transom.exe (as Tributary/Balun).
+embed-resource = "3.0"
+winresource = "0.1"
+
+# Release packages (as Tributary/Balun): `cargo deb -p transom` (Debian 13+ / Ubuntu
+# 25.04+: FreeRDP >= 3.15) and `cargo generate-rpm -p crates/transom`. The distro
+# packages in build-aux/ (RPM spec, PKGBUILD) build from source instead.
+[package.metadata.deb]
+maintainer = "John-Michael Mulesa <jmulesa@gmail.com>"
+extended-description = """\
+Transom connects to Windows, gnome-remote-desktop and xrdp over RDP, with pixel-exact \
+HiDPI and fractional scaling, multi-monitor, clipboard (text, images, files), audio, \
+RD Gateway, Kerberos single sign-on and device redirection."""
+copyright = "2026, Transom contributors"
+license-file = ["../../COPYING", "0"]
+section = "net"
+priority = "optional"
+depends = "$auto, libgtk-4-1 (>= 4.16), libadwaita-1-0 (>= 1.6), libfreerdp3-3 (>= 3.15), libfreerdp-client3-3 (>= 3.15)"
+assets = [
+  ["target/release/transom", "usr/bin/", "755"],
+  ["../../data/io.github.jm2.Transom.desktop", "usr/share/applications/", "644"],
+  ["../../data/io.github.jm2.Transom.metainfo.xml", "usr/share/metainfo/", "644"],
+  ["../../data/io.github.jm2.Transom.mime.xml", "usr/share/mime/packages/io.github.jm2.Transom.xml", "644"],
+  ["../../data/icons/hicolor/16x16/apps/io.github.jm2.Transom.png", "usr/share/icons/hicolor/16x16/apps/", "644"],
+  ["../../data/icons/hicolor/24x24/apps/io.github.jm2.Transom.png", "usr/share/icons/hicolor/24x24/apps/", "644"],
+  ["../../data/icons/hicolor/32x32/apps/io.github.jm2.Transom.png", "usr/share/icons/hicolor/32x32/apps/", "644"],
+  ["../../data/icons/hicolor/48x48/apps/io.github.jm2.Transom.png", "usr/share/icons/hicolor/48x48/apps/", "644"],
+  ["../../data/icons/hicolor/64x64/apps/io.github.jm2.Transom.png", "usr/share/icons/hicolor/64x64/apps/", "644"],
+  ["../../data/icons/hicolor/128x128/apps/io.github.jm2.Transom.png", "usr/share/icons/hicolor/128x128/apps/", "644"],
+  ["../../data/icons/hicolor/256x256/apps/io.github.jm2.Transom.png", "usr/share/icons/hicolor/256x256/apps/", "644"],
+  ["../../data/icons/hicolor/512x512/apps/io.github.jm2.Transom.png", "usr/share/icons/hicolor/512x512/apps/", "644"],
+  ["../../data/icons/hicolor/scalable/apps/io.github.jm2.Transom.svg", "usr/share/icons/hicolor/scalable/apps/", "644"],
+]
+
+[package.metadata.generate-rpm]
+release = "1"
+assets = [
+  { source = "target/release/transom", dest = "/usr/bin/transom", mode = "0755" },
+  { source = "../../data/io.github.jm2.Transom.desktop", dest = "/usr/share/applications/io.github.jm2.Transom.desktop", mode = "0644" },
+  { source = "../../data/io.github.jm2.Transom.metainfo.xml", dest = "/usr/share/metainfo/io.github.jm2.Transom.metainfo.xml", mode = "0644" },
+  { source = "../../data/io.github.jm2.Transom.mime.xml", dest = "/usr/share/mime/packages/io.github.jm2.Transom.xml", mode = "0644" },
+  { source = "../../data/icons/hicolor/16x16/apps/io.github.jm2.Transom.png", dest = "/usr/share/icons/hicolor/16x16/apps/io.github.jm2.Transom.png", mode = "0644" },
+  { source = "../../data/icons/hicolor/24x24/apps/io.github.jm2.Transom.png", dest = "/usr/share/icons/hicolor/24x24/apps/io.github.jm2.Transom.png", mode = "0644" },
+  { source = "../../data/icons/hicolor/32x32/apps/io.github.jm2.Transom.png", dest = "/usr/share/icons/hicolor/32x32/apps/io.github.jm2.Transom.png", mode = "0644" },
+  { source = "../../data/icons/hicolor/48x48/apps/io.github.jm2.Transom.png", dest = "/usr/share/icons/hicolor/48x48/apps/io.github.jm2.Transom.png", mode = "0644" },
+  { source = "../../data/icons/hicolor/64x64/apps/io.github.jm2.Transom.png", dest = "/usr/share/icons/hicolor/64x64/apps/io.github.jm2.Transom.png", mode = "0644" },
+  { source = "../../data/icons/hicolor/128x128/apps/io.github.jm2.Transom.png", dest = "/usr/share/icons/hicolor/128x128/apps/io.github.jm2.Transom.png", mode = "0644" },
+  { source = "../../data/icons/hicolor/256x256/apps/io.github.jm2.Transom.png", dest = "/usr/share/icons/hicolor/256x256/apps/io.github.jm2.Transom.png", mode = "0644" },
+  { source = "../../data/icons/hicolor/512x512/apps/io.github.jm2.Transom.png", dest = "/usr/share/icons/hicolor/512x512/apps/io.github.jm2.Transom.png", mode = "0644" },
+  { source = "../../data/icons/hicolor/scalable/apps/io.github.jm2.Transom.svg", dest = "/usr/share/icons/hicolor/scalable/apps/io.github.jm2.Transom.svg", mode = "0644" },
+  { source = "../../COPYING", dest = "/usr/share/licenses/transom/COPYING", mode = "0644", doc = true },
+]
+
+[package.metadata.generate-rpm.requires]
+gtk4 = ">= 4.16"
+libadwaita = ">= 1.6"
+freerdp-libs = ">= 3.15"
+libsecret = "*"
+
 [lints]
 workspace = true

@@ -1,0 +1,331 @@
+# Release packaging (as Tributary/Balun): on a published GitHub release (or a manual
+# dry run), build every package from the tagged source, checksum the exact asset
+# list, attest build provenance, and attach the assets to the release.
+name: Release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to build (vX.Y.Z)
+        required: true
+      dry_run:
+        description: Build only; don't publish
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  prepare:
+    name: Resolve release source
+    runs-on: ubuntu-24.04
+    outputs:
+      build_ref: ${{ steps.source.outputs.build_ref }}
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.source.outputs.version }}
+    steps:
+      - name: Validate requested tag
+        id: release
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          DISPATCH_TAG: ${{ inputs.tag }}
+        run: |
+          TAG="${RELEASE_TAG:-$DISPATCH_TAG}"
+          SEMVER='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$'
+          [[ "$TAG" =~ $SEMVER ]] || { echo "tag must be vX.Y.Z[-pre]; got '$TAG'" >&2; exit 1; }
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ steps.release.outputs.tag }}
+          persist-credentials: false
+      - name: Resolve immutable source and version
+        id: source
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          VERSION="$(awk -F'"' '/^\[workspace.package\]/{p=1; next} p && /^version = /{print $2; exit}' Cargo.toml)"
+          [[ "$TAG" == "v$VERSION" ]] || { echo "tag $TAG != Cargo version $VERSION" >&2; exit 1; }
+          echo "build_ref=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+  flatpak:
+    name: Flatpak (${{ matrix.arch }})
+    needs: prepare
+    runs-on: ${{ matrix.runner }}
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-51
+      options: --privileged
+    strategy:
+      matrix:
+        include:
+          - { arch: x86_64, runner: ubuntu-24.04 }
+          - { arch: aarch64, runner: ubuntu-24.04-arm }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.build_ref }}
+          persist-credentials: false
+      - name: Vendored cargo sources match Cargo.lock
+        run: python3 build-aux/flatpak/cargo-sources.py Cargo.lock | diff -u build-aux/flatpak/cargo-sources.json -
+      - uses: flatpak/flatpak-github-actions/flatpak-builder@79327416609af08178ad73b352877e51450790b3 # v6.8
+        with:
+          bundle: transom-linux-${{ matrix.arch }}.flatpak
+          manifest-path: build-aux/flatpak/io.github.jm2.Transom.yml
+          cache-key: flatpak-${{ matrix.arch }}-${{ hashFiles('build-aux/flatpak/*', 'Cargo.lock') }}
+          arch: ${{ matrix.arch }}
+          upload-artifact: false
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: transom-linux-${{ matrix.arch }}-flatpak
+          path: transom-linux-${{ matrix.arch }}.flatpak
+          if-no-files-found: error
+
+  macos:
+    name: macOS (aarch64)
+    needs: prepare
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.build_ref }}
+          persist-credentials: false
+      - run: brew install gtk4 libadwaita freerdp ffmpeg adwaita-icon-theme pkg-config llvm create-dmg
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+          targets: aarch64-apple-darwin
+      - name: Build .app and .dmg
+        env:
+          CARGO_BUILD_TARGET: aarch64-apple-darwin
+        run: |
+          scripts/build-macos.sh --dmg
+          mv dist/Transom.dmg dist/transom-macos-aarch64.dmg
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: transom-macos-aarch64
+          path: dist/transom-macos-aarch64.dmg
+          if-no-files-found: error
+
+  windows:
+    name: Windows (${{ matrix.arch }})
+    needs: prepare
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x86_64, runner: windows-2025, msystem: CLANG64, pkg_prefix: mingw-w64-clang-x86_64, rust_target: x86_64-pc-windows-gnullvm, msys_env: clang64 }
+          - { arch: aarch64, runner: windows-11-arm, msystem: CLANGARM64, pkg_prefix: mingw-w64-clang-aarch64, rust_target: aarch64-pc-windows-gnullvm, msys_env: clangarm64 }
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.build_ref }}
+          persist-credentials: false
+      - uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2.33.0
+        env:
+          __SETUP_MSYS2_USE_MAIN_MIRROR_ONLY: 'true'
+        with:
+          msystem: ${{ matrix.msystem }}
+          path-type: inherit
+          update: true
+          install: >-
+            ${{ matrix.pkg_prefix }}-gtk4 ${{ matrix.pkg_prefix }}-libadwaita
+            ${{ matrix.pkg_prefix }}-freerdp ${{ matrix.pkg_prefix }}-ffmpeg
+            ${{ matrix.pkg_prefix }}-adwaita-icon-theme ${{ matrix.pkg_prefix }}-pkg-config
+            ${{ matrix.pkg_prefix }}-clang ${{ matrix.pkg_prefix }}-toolchain
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+          targets: ${{ matrix.rust_target }}
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --version 6.7.1 --allow-downgrade -y --no-progress
+      - name: Build zip and installer
+        env:
+          RUST_TARGET: ${{ matrix.rust_target }}
+          MSYS_ENV: ${{ matrix.msys_env }}
+        run: |
+          pwsh -File scripts/build-windows.ps1 -Msys2Root "$(cygpath -w /)" -InnoSetup
+          mv dist/transom-windows.zip dist/transom-windows-${{ matrix.arch }}.zip
+          mv dist/transom-setup.exe dist/transom-windows-${{ matrix.arch }}-setup.exe
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: transom-windows-${{ matrix.arch }}
+          path: |
+            dist/transom-windows-${{ matrix.arch }}.zip
+            dist/transom-windows-${{ matrix.arch }}-setup.exe
+          if-no-files-found: error
+
+  linux-deb:
+    name: Debian package (${{ matrix.arch }})
+    needs: prepare
+    runs-on: ${{ matrix.runner }}
+    # Debian 13 is the oldest Debian-family release with FreeRDP >= 3.15.
+    container: debian:trixie
+    strategy:
+      matrix:
+        include:
+          - { arch: amd64, runner: ubuntu-24.04 }
+          - { arch: arm64, runner: ubuntu-24.04-arm }
+    steps:
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          apt-get install -y build-essential pkg-config clang libclang-dev curl git dpkg-dev \
+            libgtk-4-dev libadwaita-1-dev freerdp3-dev libwinpr3-dev libsecret-1-dev \
+            libavcodec-dev libavutil-dev
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.build_ref }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+      - name: Build .deb
+        run: |
+          cargo build --release --locked -p transom
+          cargo install cargo-deb --version 3.8.0 --locked
+          cargo deb -p transom --no-build --output dist/transom-${{ matrix.arch }}.deb
+          apt-get install -y ./dist/transom-${{ matrix.arch }}.deb
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: transom-${{ matrix.arch }}-deb
+          path: dist/transom-${{ matrix.arch }}.deb
+          if-no-files-found: error
+
+  linux-rpm:
+    name: RPM (${{ matrix.arch }})
+    needs: prepare
+    runs-on: ${{ matrix.runner }}
+    container: registry.fedoraproject.org/fedora:45
+    strategy:
+      matrix:
+        include:
+          - { arch: x86_64, runner: ubuntu-24.04 }
+          - { arch: aarch64, runner: ubuntu-24.04-arm }
+    steps:
+      - name: Install build dependencies
+        run: >-
+          dnf install -y --setopt=install_weak_deps=False git gcc clang-devel pkgconf-pkg-config
+          rustup freerdp-devel libwinpr-devel gtk4-devel libadwaita-devel libsecret-devel
+          libavcodec-free-devel libavutil-free-devel
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.build_ref }}
+          persist-credentials: false
+      - name: Build .rpm
+        run: |
+          rustup-init -y --profile minimal
+          . "$HOME/.cargo/env"
+          cargo build --release --locked -p transom
+          cargo install cargo-generate-rpm --version 0.21.0 --locked
+          cargo generate-rpm -p crates/transom -o dist/transom-${{ matrix.arch }}.rpm
+          dnf install -y ./dist/transom-${{ matrix.arch }}.rpm
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: transom-${{ matrix.arch }}-rpm
+          path: dist/transom-${{ matrix.arch }}.rpm
+          if-no-files-found: error
+
+  linux-arch:
+    name: Arch Linux package (x86_64)
+    needs: prepare
+    runs-on: ubuntu-24.04
+    container: archlinux:base-devel
+    steps:
+      - name: Install build dependencies
+        run: pacman -Syu --noconfirm git rust clang freerdp gtk4 libadwaita libsecret ffmpeg
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.build_ref }}
+          persist-credentials: false
+      - name: Build package (unprivileged)
+        run: |
+          useradd -m builder
+          chown -R builder .
+          su builder -c 'scripts/dist.sh && cd build-aux/arch && makepkg --noconfirm --nodeps'
+          mkdir -p dist
+          cp build-aux/arch/transom-*.pkg.tar.zst dist/transom-x86_64.pkg.tar.zst
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: transom-x86_64-arch
+          path: dist/transom-x86_64.pkg.tar.zst
+          if-no-files-found: error
+
+  checksums:
+    name: SHA256 checksums
+    needs: [prepare, flatpak, macos, windows, linux-deb, linux-rpm, linux-arch]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Generate SHA256SUMS over the exact asset list
+        run: |
+          set -euo pipefail
+          cd artifacts
+          expected=(
+            transom-aarch64.rpm transom-amd64.deb transom-arm64.deb
+            transom-linux-aarch64.flatpak transom-linux-x86_64.flatpak
+            transom-macos-aarch64.dmg
+            transom-windows-aarch64-setup.exe transom-windows-aarch64.zip
+            transom-windows-x86_64-setup.exe transom-windows-x86_64.zip
+            transom-x86_64.pkg.tar.zst transom-x86_64.rpm
+          )
+          n=$(find . -maxdepth 1 -type f | wc -l)
+          (( n == ${#expected[@]} )) || { echo "expected ${#expected[@]} assets, found $n" >&2; ls >&2; exit 1; }
+          for f in "${expected[@]}"; do [[ -f $f ]] || { echo "missing $f" >&2; exit 1; }; done
+          sha256sum "${expected[@]}" | LC_ALL=C sort -k2 > ../SHA256SUMS.txt
+          cat ../SHA256SUMS.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: SHA256SUMS
+          path: SHA256SUMS.txt
+          if-no-files-found: error
+
+  attest:
+    name: Attest build provenance
+    if: github.event_name == 'release'
+    needs: checksums
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: SHA256SUMS
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-checksums: SHA256SUMS.txt
+
+  publish:
+    name: Publish release assets
+    if: github.event_name == 'release'
+    needs: [prepare, checksums, attest]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: release-assets
+          merge-multiple: true
+      - uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
+        with:
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          files: release-assets/*
+          fail_on_unmatched_files: true

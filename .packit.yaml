@@ -1,0 +1,29 @@
+# Packit → COPR builds of the RPM spec on each GitHub release (as Tributary/Balun).
+# https://packit.dev/docs/configuration/
+#
+# The spec builds offline from two tarballs (scripts/dist.sh: the source and the
+# vendored crates); create-archive makes both, puts them beside the spec, and
+# reports Source0.
+specfile_path: build-aux/rpm/transom.spec
+files_to_sync:
+  - build-aux/rpm/transom.spec
+  - .packit.yaml
+upstream_package_name: transom
+downstream_package_name: transom
+upstream_project_url: https://github.com/jm2/transom
+upstream_tag_template: "v{version}"
+
+actions:
+  create-archive:
+    - bash -c "scripts/dist.sh >/dev/null && mv dist/transom-*.tar.gz dist/transom-*-vendor.tar.xz build-aux/rpm/ && ls build-aux/rpm/transom-*[0-9].tar.gz"
+
+jobs:
+  - job: copr_build
+    trigger: release
+    owner: jmsqrd
+    project: transom
+    targets:
+      - fedora-44-x86_64
+      - fedora-44-aarch64
+      - fedora-45-x86_64
+      - fedora-45-aarch64
