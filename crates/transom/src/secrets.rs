@@ -68,7 +68,7 @@ mod imp {
 
     const SERVICE: &str = "io.github.jm2.Transom";
 
-    fn store() -> Result<Arc<keyring_core::CredentialStore>, String> {
+    fn native_store() -> Result<Arc<keyring_core::CredentialStore>, String> {
         // Built per operation, so a store that failed to open can be retried.
         #[cfg(target_os = "macos")]
         let s: Arc<keyring_core::CredentialStore> =
@@ -80,7 +80,7 @@ mod imp {
     }
 
     fn entry(profile_id: &str) -> Result<keyring_core::Entry, String> {
-        store()?
+        native_store()?
             .build(SERVICE, profile_id, None)
             .map_err(|e| e.to_string())
     }
