@@ -609,8 +609,11 @@ impl MainWindow {
         *self.profiles.borrow_mut() = profiles;
     }
 
+    /// Show `text` (plain text: escaped, since toast titles are Pango markup and
+    /// messages often quote user input such as `rdp://…&username=…`).
     pub fn toast(&self, text: &str) {
-        self.toasts.add_toast(adw::Toast::new(text));
+        self.toasts
+            .add_toast(adw::Toast::new(&glib::markup_escape_text(text)));
     }
 
     /// Quick connect / command line: `host[:port]`, `user@host`, or an `rdp://` URI.

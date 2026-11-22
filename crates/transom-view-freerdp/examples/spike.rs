@@ -395,6 +395,12 @@ fn main() -> ExitCode {
         }
         if Instant::now() > deadline {
             eprintln!("timed out");
+            // Still useful: what was on screen (e.g. an animation that never settles).
+            if let Some(f) = &frame
+                && let Ok((w, h)) = write_png(&args.out, f)
+            {
+                eprintln!("wrote {} ({w}x{h}) at the timeout", args.out);
+            }
             break;
         }
     }

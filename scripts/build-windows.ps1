@@ -131,7 +131,10 @@ if ($InnoSetup) {
     if (-not $iscc) { Fail 'Inno Setup 6 (ISCC.exe) not found; choco install innosetup' }
     $version = (Select-String -Path (Join-Path $repo 'Cargo.toml') -Pattern '^version\s*=\s*"([^"]+)"' |
         Select-Object -First 1).Matches[0].Groups[1].Value
-    $numeric = (($version -split '[-+]')[0] -split '\.' + @('0', '0', '0', '0'))[0..3] -join '.'
+    # Four-part numeric form for the version resource: "1.2.3-rc1" -> "1.2.3.0".
+    $parts = @(($version -split '[-+]')[0] -split '\.')
+    while ($parts.Count -lt 4) { $parts += '0' }
+    $numeric = ($parts[0..3]) -join '.'
     & $iscc "/DAppVersion=$version" "/DAppNumericVersion=$numeric" "/DSourceDir=$dist" `
         "/DOutputDir=$(Join-Path $repo 'dist')" "/DTargetArch=$innoArch" `
         (Join-Path $repo 'build-aux\inno\transom.iss')

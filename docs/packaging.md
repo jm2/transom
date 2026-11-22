@@ -24,4 +24,11 @@ GitHub release.
 | USB redirection | libusb (udev permission, `docs/usb.md`) | not yet: no device list (FreeRDP could; only devices without a kernel driver) | not yet: no device list (devices would need WinUSB) |
 | Drives, printers, smart cards | yes | yes | yes |
 
+Verified in the Windows 11 test VM (2026-11-22): `build-windows.ps1 -InnoSetup` builds
+the installer (Inno Setup 6.7); a silent install registers `rdp:` and the `Transom.rdp`
+ProgID; an `rdp://` link opened through the shell and an `.rdp` file opened through the
+ProgID both start a connection in the installed app; the uninstaller removes every
+registration and leaves mstsc's `.rdp` default alone
+(`tests/servers/windows/installer-*.ps1`).
+
 Regenerate the raster icons after changing the SVG with `scripts/gen-icons.sh`.
