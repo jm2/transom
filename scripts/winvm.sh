@@ -153,8 +153,18 @@ qemu_args() {
         -display none -vnc "unix:$VM/vnc.sock"
         -pidfile "$VM/qemu.pid")
     local net="user,id=n0,hostfwd=tcp:127.0.0.1:$PORT-:3389"
-    # Server: RD Gateway (HTTPS) on localhost:13443.
-    [[ $name == server ]] && net+=",hostfwd=tcp:127.0.0.1:13443-:443"
+    # Server: RD Gateway (HTTPS) on localhost:13443, and its KDC (once it is the test
+    # domain's controller, scripts/ad-setup.sh) on localhost:13088 for client kinit.
+    [[ $name == server ]] && net+=",hostfwd=tcp:127.0.0.1:13443-:443,hostfwd=tcp:127.0.0.1:13088-:88"
+    # Lab network between the VMs (test AD domain): a point-to-point Ethernet link over
+    # a unix socket, no root or bridge. The server listens; win11 (re)connects to it.
+    # 10.77.0.1 = server (DC, DNS), 10.77.0.2 = win11; set statically by ad-setup.sh.
+    if [[ $mode == run ]]; then
+        local lab="stream,id=lab,addr.type=unix,addr.path=$ROOT/lab.sock"
+        if [[ $name == server ]]; then lab+=",server=on"; rm -f "$ROOT/lab.sock"
+        else lab+=",server=off,reconnect-ms=2000"; fi
+        A+=(-netdev "$lab" -device "e1000e,netdev=lab,mac=52:54:00:77:00:0$([[ $name == server ]] && echo 1 || echo 2)")
+    fi
     if [[ $mode == install ]]; then
         # No internet during setup: no updates or online-account detours, faster.
         net+=",restrict=on"

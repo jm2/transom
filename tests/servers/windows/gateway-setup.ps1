@@ -16,20 +16,28 @@ if (-not $cert) {
         -CertStoreLocation Cert:\LocalMachine\My -NotAfter (Get-Date).AddYears(2)
 }
 Set-Item RDS:\GatewayServer\SSLCertificate\Thumbprint -Value $cert.Thumbprint
-if (-not (Get-LocalGroup TransomGateway -ErrorAction SilentlyContinue)) {
-    New-LocalGroup TransomGateway -Description 'Transom RD Gateway test users' | Out-Null
+# Once the server is the test domain's DC (scripts/ad-setup.sh) local groups are gone:
+# use the domain group TransomGateway (created there) and allow the domain member too.
+$dc = (Get-CimInstance Win32_ComputerSystem).DomainRole -ge 4
+$computers = @($env:COMPUTERNAME, 'localhost', '127.0.0.1')
+if ($dc) {
+    $group = 'TransomGateway@TRANSOM'
+    $computers += 'TRANSOM-SRV.transom.test', 'TRANSOM-W11', 'TRANSOM-W11.transom.test'
+} else {
+    if (-not (Get-LocalGroup TransomGateway -ErrorAction SilentlyContinue)) {
+        New-LocalGroup TransomGateway -Description 'Transom RD Gateway test users' | Out-Null
+    }
+    if (-not (Get-LocalGroupMember TransomGateway -ErrorAction SilentlyContinue | Where-Object Name -like '*\rdp')) {
+        Add-LocalGroupMember TransomGateway -Member rdp
+    }
+    $group = "TransomGateway@$env:COMPUTERNAME"
 }
-if (-not (Get-LocalGroupMember TransomGateway -ErrorAction SilentlyContinue | Where-Object Name -like '*\rdp')) {
-    Add-LocalGroupMember TransomGateway -Member rdp
-}
-$group = "TransomGateway@$env:COMPUTERNAME"
-if (-not (Test-Path RDS:\GatewayServer\GatewayManagedComputerGroups\TransomTargets)) {
-    New-Item RDS:\GatewayServer\GatewayManagedComputerGroups -Name TransomTargets `
-        -Description 'Transom test targets' -Computers $env:COMPUTERNAME, 'localhost', '127.0.0.1' | Out-Null
-}
-foreach ($p in 'CAP\TransomCAP', 'RAP\TransomRAP') {
+# Recreated each run (the RAP refers to the computer group, so it goes first).
+foreach ($p in 'CAP\TransomCAP', 'RAP\TransomRAP', 'GatewayManagedComputerGroups\TransomTargets') {
     if (Test-Path "RDS:\GatewayServer\$p") { Remove-Item -Recurse "RDS:\GatewayServer\$p" }
 }
+New-Item RDS:\GatewayServer\GatewayManagedComputerGroups -Name TransomTargets `
+    -Description 'Transom test targets' -Computers $computers | Out-Null
 New-Item RDS:\GatewayServer\CAP -Name TransomCAP -UserGroups $group -AuthMethod 1 | Out-Null
 New-Item RDS:\GatewayServer\RAP -Name TransomRAP -UserGroups $group -ComputerGroupType 0 `
     -ComputerGroup TransomTargets | Out-Null

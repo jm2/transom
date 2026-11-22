@@ -36,9 +36,12 @@ podman run --rm --network container:transom-grd --userns=keep-id \
     -v "$K:/out:Z" -v "$STATE/kdc-user.pw:/pw:ro,Z" --entrypoint bash transom-test-kdc \
     -c 'kinit rdp@TRANSOM.TEST < /pw >/dev/null && klist | sed -n 2p'
 fp=$(podman logs transom-grd 2>&1 | sed -n 's/^TLS fingerprint: //p' | tail -1)
-out=$(podman run --rm --network container:transom-grd --userns=keep-id \
-    -e KRB5_CONFIG=/out/krb5.conf -e KRB5CCNAME=FILE:/out/krb5cc_rdp -e RUST_LOG=info \
+lib=()  # FREERDP_LIBDIR=DIR: run against another FreeRDP build (lib64)
+[[ -n ${FREERDP_LIBDIR:-} ]] && lib=(-e LD_LIBRARY_PATH=/fr -v "$(realpath "$FREERDP_LIBDIR"):/fr:ro,Z")
+out=$(podman run --rm --network container:transom-grd --userns=keep-id "${lib[@]}" \
+    -e KRB5_CONFIG=/out/krb5.conf -e KRB5CCNAME=FILE:/out/krb5cc_rdp -e RUST_LOG=info -e WLOG_LEVEL=${WLOG_LEVEL:-WARN} \
     -v "$K:/out:Z" -v "$PWD/target/debug/examples:/x:ro,Z" --entrypoint /x/spike transom-test-grd \
     localhost:3389 rdp --domain TRANSOM.TEST --kerberos --trust "$fp" --out /out/kerberos.png 2>&1 || true)
+[[ -n ${SHOW_ALL:-} ]] && echo "$out"
 echo "$out" | grep -E "^(connected|wrote|disconnected)|Kerberos ticket" | sed 's/\x1b\[[0-9;]*m//g'
 grep -q "^wrote" <<<"$out" && echo "KERBEROS OK (no password)" || { echo "KERBEROS FAILED"; exit 1; }
