@@ -227,8 +227,9 @@ for, and test refusals as well as success.
       `scripts/devices-check.sh` reads and writes `\\tsclient\transom` on Windows 11, and a
       server-side refusal leaves the session and other devices working. Read-only: not
       supported by FreeRDP's drive channel.
-- [ ] Smart cards (MS-RDPESC) via PC/SC (pcsc-lite; macOS CryptoTokenKit and Windows
-      WinSCard both expose PC/SC). Test: virtual card (vsmartcard/virt_cacard) vs Windows.
+- [x] Smart cards (MS-RDPESC) via PC/SC: devices-check runs pcscd with a virtual CAC card
+      (vsmartcard vpcd + virt_cacard) on the client; Windows 11 and Server 2025 list its
+      readers in the session.
 - [x] Printers (MS-RDPEPC): all local CUPS printers; devices-check prints from Windows to a
       throwaway CUPS-PDF printer and finds the text in the PDF. (Print portal for Flatpak:
       todo.)

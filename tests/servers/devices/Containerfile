@@ -5,7 +5,18 @@ FROM localhost/transom-test-grd
 USER root
 RUN dnf install -y --setopt=install_weak_deps=False \
         cups cups-client cups-pdf ghostscript socat poppler-utils libasan \
-        pcsc-lite \
+        pcsc-lite pcsc-lite-devel softhsm opensc nss-tools gnutls-utils \
+        libcacard-devel glib2-devel git gcc make autoconf automake libtool help2man which \
     && dnf clean all
+# Virtual smart card for the PC/SC path: vsmartcard's vpcd (a pcscd reader driver
+# that takes a card over a socket) and virt_cacard (a CAC card on softhsm2 certs).
+# Neither is packaged in Fedora; pinned commits, built here, test image only.
+RUN git clone -q https://github.com/frankmorgner/vsmartcard.git /src/vsmartcard \
+    && cd /src/vsmartcard/virtualsmartcard && autoreconf -fi >/dev/null \
+    && ./configure -q --sysconfdir=/etc && make -s && make -s install \
+    && git clone -q https://github.com/Jakuje/virt_cacard.git /src/virt_cacard \
+    && cd /src/virt_cacard && ./autogen.sh >/dev/null && ./configure -q && make -s \
+    && echo "disable-in: virt_cacard" >> /usr/share/p11-kit/modules/opensc.module \
+    && bash ./setup-softhsm2.sh >/dev/null
 COPY client.sh /client.sh
 ENTRYPOINT ["/client.sh"]

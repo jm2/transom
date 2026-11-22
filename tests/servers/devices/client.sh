@@ -20,4 +20,12 @@ for _ in $(seq 50); do [[ -e /dev/ttyPEER ]] && break; sleep 0.1; done
 ( while IFS= read -r line < /dev/ttyPEER; do
       echo "serial got: ${line%$'\r'}"; printf 'reply: %s\r\n' "${line%$'\r'}" > /dev/ttyPEER
   done ) &
+# Smart card (SMARTCARD=1): pcscd with vpcd, and virt_cacard's card inserted.
+if [[ -n ${SMARTCARD:-} ]]; then
+    pcscd --disable-polkit 2>/dev/null || pcscd
+    sleep 1
+    (cd /src/virt_cacard && SOFTHSM2_CONF=/src/virt_cacard/softhsm2.conf ./virt_cacard >/tmp/virt_cacard.log 2>&1 &)
+    sleep 2
+    echo "smart card readers: $(opensc-tool -l 2>/dev/null | sed -n 's/^[0-9]* *[A-Za-z]* *//p' | tr '\n' ';')"
+fi
 exec "$@"

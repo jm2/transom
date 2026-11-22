@@ -3,10 +3,12 @@
 # Device redirection check (PLAN Phase 4b) against a Windows test VM:
 # TARGET=win11 (default) or server. The client runs in a container with its own
 # devices (tests/servers/devices: a throwaway CUPS with a PDF printer, a pty pair as
-# a serial port), so nothing on this computer is redirected. A probe in the
+# a serial port, PC/SC with a virtual CAC card), so nothing on this computer is
+# redirected. A probe in the
 # Windows session (device-probe.ps1) uses each device:
 #   drive    reads a file from \\tsclient\transom and writes one back
 #   printer  prints a line; the PDF that comes out on the client must contain it
+#   smartcard lists the readers the session sees: the client's virtual reader
 #   serial   writes a line to COM9 and reads the client's reply (known issue: see
 #            docs/known-issues.md)
 #   refusal  with drive redirection disabled on the server, the session still
@@ -37,7 +39,7 @@ rm -rf "$D"; mkdir -p "$D/share" "$D/pdf"
 echo "from the client $$" > "$D/share/hello.txt"
 client() { # LOG extra spike args… (background; sets $client)
     local log=$1; shift
-    podman run --rm --network host \
+    podman run --rm --network host -e SMARTCARD=1 \
         -v "$PWD/target/debug/examples:/x:ro,Z" -v "$STATE:/state:Z" \
         -v "$D/share:/share:Z" -v "$D/pdf:/out/pdf:Z" transom-test-devices \
         /x/spike "$T_ADDR" "$T_USER" --password-file /state/target.pw --trust "$T_FP" \
@@ -49,7 +51,7 @@ pass() { echo "$1: OK${2:+ ($2)}"; }
 fail() { echo "$1: FAILED${2:+ ($2)}"; ok=0; }
 
 echo "--- all devices ($TARGET)"
-client "$D/client.log" --drive transom=/share --printers --serial COM9=/dev/ttyTRANSOM
+client "$D/client.log" --drive transom=/share --printers --serial COM9=/dev/ttyTRANSOM --smartcards
 sleep 12
 r=$(probe -Action drive -Name transom)
 [[ $(jget read <<<"$r") == "from the client $$" && $(cat "$D/share/from-windows.txt" 2>/dev/null) == "written by Windows" ]] \
@@ -57,10 +59,12 @@ r=$(probe -Action drive -Name transom)
 r=$(probe -Action print)
 printer=$(jget printer <<<"$r")
 r2=$(probe -Action serial -Name COM9)
+r3=$(probe -Action smartcard)
 wait "$client" || true
 pdf=$(ls "$D/pdf" | grep -i '\.pdf$' | head -1 || true)
 text=$([[ -n $pdf ]] && podman run --rm -v "$D/pdf:/p:ro,Z" --entrypoint pdftotext transom-test-devices "/p/$pdf" - 2>/dev/null || true)
 [[ $text == *"TRANSOM PRINT TEST"* ]] && pass printer "$printer -> $pdf" || fail printer "$r; pdf: ${pdf:-none}"
+[[ $(jget readers <<<"$r3") == *"Virtual PCD"* ]] && pass smartcard "readers: $(jget readers <<<"$r3")" || fail smartcard "$r3"
 if [[ $(jget reply <<<"$r2") == "reply: hello COM" ]]; then
     pass serial "COM9 <-> client pty"
 else
