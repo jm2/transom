@@ -34,12 +34,23 @@ without slowing down the GNOME work.
 4. **HiDPI math is toolkit-neutral.** GTK on macOS reports integer scales (1 or 2), and on
    Windows it can report fractional scales. `transom-view-core::geometry` already treats
    scale as an arbitrary positive `f64`.
-5. **CI** builds and tests `transom-view-core` on Linux, macOS and Windows from Phase 1.
-   The full app is added on macOS and Windows once the widget is stable.
+5. **CI** builds and tests the whole workspace on Linux, macOS (arm64) and Windows
+   (x64, arm64), and packages the app on each (since 2026-11-22).
+6. **Toolchains (as Tributary/Balun):**
+   - **Windows:** MSYS2 CLANG64/CLANGARM64, which packages GTK 4, libadwaita, FreeRDP 3
+     and FFmpeg for both architectures. Rust targets `*-pc-windows-gnullvm`. Not vcpkg:
+     its MSVC FreeRDP would clash with the MSYS2 GTK stack.
+   - **macOS:** Homebrew, arm64 only.
+   - **Passwords:** keyring-core's native stores on macOS and Windows; libsecret stays
+     on Linux, because it works through the Secret portal in Flatpak.
 
 ## Consequences
 
 - Wayland-specific niceties (fractional-scale protocol, shortcut inhibition) stay
   behind GTK APIs, which degrade gracefully on other backends.
-- macOS/Windows packaging (DMG, installer) is post-v0.1. The Balun/Tributary build
-  scripts are the template.
+- macOS/Windows packaging follows the sibling scripts, in a leaner form:
+  - `scripts/build-macos.sh` makes a relocatable, ad-hoc-signed `.app` and `.dmg`;
+  - `scripts/build-windows.ps1` makes a portable zip and an Inno Setup installer;
+  - `docs/packaging.md` has the full matrix.
+- Not yet: Developer ID signing and notarisation, and Authenticode (neither sibling
+  has them either).
