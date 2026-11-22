@@ -1437,6 +1437,7 @@ dependencies = [
  "png",
  "secrecy",
  "tracing",
+ "tracing-subscriber",
  "transom-view-core",
 ]
 

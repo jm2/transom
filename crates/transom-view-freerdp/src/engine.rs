@@ -151,7 +151,9 @@ pub(crate) struct State {
     disp: AtomicPtr<ffi::DispClientContext>,
     disp_ready: AtomicBool,
     waker: Arc<FreeRdpWaker>,
-    config: SessionConfig,
+    pub(crate) config: SessionConfig,
+    /// Zero-copy H.264 state (ADR 0006).
+    pub(crate) video: crate::gfxvideo::Video,
     /// Kerberos: whether the ticket cache was already tried for the server / gateway.
     kerberos_tried: [AtomicBool; 2],
     cert_rejected: AtomicBool,
@@ -272,6 +274,7 @@ fn run(
         disp_ready: AtomicBool::new(false),
         waker: waker.clone(),
         config,
+        video: Default::default(),
         kerberos_tried: [AtomicBool::new(false), AtomicBool::new(false)],
         cert_rejected: AtomicBool::new(false),
         auth_cancelled: AtomicBool::new(false),
@@ -421,6 +424,7 @@ unsafe fn event_loop(
                 // SAFETY: input belongs to the live context.
                 Ok(EngineCommand::Input(ev)) => unsafe { send_input((*ctx).input, ev) },
                 // SAFETY: as above.
+                Ok(EngineCommand::VideoUnsupported) => state.video.request_disable(),
                 Ok(EngineCommand::CtrlAltDel) => unsafe { send_ctrl_alt_del((*ctx).input) },
                 Ok(EngineCommand::ClipboardLocalFormats(f)) => {
                     if state.config.clipboard.to_remote() {
@@ -708,7 +712,16 @@ unsafe fn apply_settings(
     // GFX codecs: AVC444 → AVC420 → RemoteFX/progressive → planar (PLAN §4). Only
     // advertise H.264 when a decoder really works (e.g. not a stub OpenH264).
     let h264 = h264_available();
-    set_bool(ffi::FreeRDP_GfxH264, h264)?;
+    // Hardware decoding (ADR 0006) takes the AVC420 commands; AVC444 (two streams to
+    // recombine) stays with FreeRDP's software decoder. Advertise both: with AVC420
+    // alone FreeRDP offers only GFX 8.1, and Windows then picks RemoteFX for the
+    // desktop. Which one the server sends is the server's choice: by default Windows
+    // uses AVC420 for regions it classifies as video (the ones zero-copy is for), and
+    // AVC444 for the whole desktop under the "Prioritize H.264/AVC 444" policy or in
+    // thin-client mode (so we don't ask for thin-client mode).
+    let hw = cfg.video_decode != transom_view_core::video::VideoDecode::Software
+        && crate::gfxvideo::hw_available();
+    set_bool(ffi::FreeRDP_GfxH264, h264 || hw)?;
     set_bool(ffi::FreeRDP_GfxAVC444, h264)?;
     set_bool(ffi::FreeRDP_GfxAVC444v2, h264)?;
     set_bool(ffi::FreeRDP_GfxProgressive, true)?;
@@ -915,6 +928,9 @@ unsafe extern "C" fn on_channel_connected(
             state.disp.store(disp, Ordering::SeqCst);
         } else if name.to_bytes_with_nul() == ffi::CLIPRDR_SVC_CHANNEL_NAME {
             crate::cliprdr::attach(state, (*e).pInterface.cast(), ctx);
+        } else if name.to_bytes_with_nul() == ffi::RDPGFX_DVC_CHANNEL_NAME {
+            // FreeRDP's handler (above) has just set up its GDI graphics pipeline.
+            crate::gfxvideo::attach(state, (*e).pInterface.cast());
         }
     }
 }
@@ -933,6 +949,8 @@ unsafe extern "C" fn on_channel_disconnected(
                 state.disp.store(ptr::null_mut(), Ordering::SeqCst);
             } else if name == ffi::CLIPRDR_SVC_CHANNEL_NAME {
                 crate::cliprdr::detach(state);
+            } else if name == ffi::RDPGFX_DVC_CHANNEL_NAME {
+                crate::gfxvideo::detach(state);
             }
         }
         ffi::freerdp_client_OnChannelDisconnectedEventHandler(ctx, e);
@@ -1279,7 +1297,10 @@ unsafe extern "C" fn end_paint(ctx: *mut ffi::rdpContext) -> ffi::BOOL {
             .clone();
         if let (Some(frame), false) = (frame, damage.is_empty()) {
             copy_rects(gdi, &frame, &damage);
-            state.emit(EngineEvent::FrameUpdate { damage });
+            state.emit(EngineEvent::FrameUpdate {
+                damage,
+                video: state.video.take_updates(),
+            });
         }
     }
     TRUE

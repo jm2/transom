@@ -118,6 +118,7 @@ fn main() -> ExitCode {
         initial: desktop_request(ScaleMode::MatchLocal, LogicalSize::new(1280.0, 800.0), 1.0),
         monitors: Vec::new(),
         gateway: None,
+        video_decode: Default::default(),
     };
     let login_pw = read_pw(&lpf);
     let (tx, rx) = mpsc::channel();

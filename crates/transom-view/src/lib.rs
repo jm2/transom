@@ -12,6 +12,8 @@
 //! ```
 
 mod clipboard;
+#[cfg(target_os = "linux")]
+mod dmabuf;
 mod tiles;
 mod view;
 

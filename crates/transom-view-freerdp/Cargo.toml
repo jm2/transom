@@ -24,6 +24,8 @@ pkg-config = "0.3"
 [dev-dependencies]
 # png: the Phase 0 spike dumps a received frame to disk.
 png = "0.18"
+# tracing-subscriber: RUST_LOG output in the examples (same as transom-view's demo).
+tracing-subscriber = { version = "0.3", default-features = false, features = ["env-filter", "fmt"] }
 
 [lints]
 workspace = true

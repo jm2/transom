@@ -247,10 +247,15 @@ for, and test refusals as well as success.
 - **DoD:** a GIR-based Python or Vala sample shows a session.
 
 ### Phase 6 — Performance and polish (ongoing)
-- [ ] Zero-copy dmabuf spike; GraphicsOffload; latency measurements.
-      *Latency tooling done (`scripts/latency-check.sh`): key → full repaint against grd over
-      loopback, median 26–30 ms (input 0.7 ms, server render+encode+transport ~25 ms).
-      dmabuf/offload needs a hardware H.264 stream (Windows VM or GPU-encoding grd).*
+- [x] Zero-copy H.264 (ADR 0006): AVC420 decoded with VA-API (libavcodec) to dmabufs, shown
+      as GdkDmabufTexture layers over the tiles; read-back keeps FreeRDP's surfaces correct
+      for mixed codecs; fallback to software when the renderer can't import (non-Vulkan) or
+      decoding fails. `scripts/hwdec-check.sh` (RX 6400 vs xrdp): decoder bit-exact vs
+      FreeRDP on every frame, on-screen PSNR 36–39 dB at 100–200%, fallback pixel-exact.
+      AVC444 (Windows' full-desktop mode) stays in software. Latency tooling done
+      (`scripts/latency-check.sh`: 26–30 ms median vs grd, 31 ms vs Windows).
+- [ ] GraphicsOffload (direct scanout of the video layer); AVC444 on the GPU (needs a
+      shader to recombine the two streams).
 - [x] Accessibility (screen-reader labels on all chrome, high-contrast): AT-SPI audit
       (`scripts/a11y-check.sh`); Ctrl+Alt+Home moves focus out of the session. High contrast
       comes from libadwaita (no custom colours).

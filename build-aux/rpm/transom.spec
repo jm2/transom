@@ -17,6 +17,11 @@ BuildRequires:  clang-devel
 BuildRequires:  pkgconfig(freerdp3) >= 3.15
 BuildRequires:  pkgconfig(freerdp-client3)
 BuildRequires:  pkgconfig(winpr3)
+# Zero-copy H.264 (VA-API through libavcodec). Fedora's libavcodec-free has no native
+# H.264 decoder, so this engages only with a full libavcodec (e.g. RPM Fusion's
+# libavcodec-freeworld, same soname); otherwise FreeRDP decodes in software.
+BuildRequires:  pkgconfig(libavcodec)
+BuildRequires:  pkgconfig(libavutil)
 BuildRequires:  pkgconfig(gtk4) >= 4.16
 BuildRequires:  pkgconfig(libadwaita-1) >= 1.6
 BuildRequires:  pkgconfig(libsecret-1)

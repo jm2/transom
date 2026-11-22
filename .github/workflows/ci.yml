@@ -20,6 +20,7 @@ jobs:
           dnf install -y --setopt=install_weak_deps=False
           git gcc clang-devel pkgconf-pkg-config rustup python3
           freerdp-devel libwinpr-devel gtk4-devel libadwaita-devel libsecret-devel
+          libavcodec-free-devel libavutil-free-devel
           gobject-introspection-devel vala mutter dbus-daemon
       - uses: actions/checkout@v5
       - name: Install Rust

@@ -76,6 +76,7 @@ fn main() -> ExitCode {
         initial: desktop_request(ScaleMode::MatchLocal, LogicalSize::new(1280.0, 800.0), 1.0),
         monitors: Vec::new(),
         gateway: None,
+        video_decode: Default::default(),
     };
     let (tx, rx) = mpsc::channel();
     let engine = FreeRdpEngine::new(std::env::temp_dir().join("transom-latency-freerdp"));
@@ -139,7 +140,7 @@ fn main() -> ExitCode {
         let mut first = None;
         let deadline = t0 + Duration::from_secs(2);
         while Instant::now() < deadline {
-            if let Ok(EngineEvent::FrameUpdate { damage }) =
+            if let Ok(EngineEvent::FrameUpdate { damage, .. }) =
                 rx.recv_timeout(Duration::from_millis(5))
             {
                 if first.is_none() {

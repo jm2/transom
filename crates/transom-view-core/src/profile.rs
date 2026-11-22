@@ -286,6 +286,7 @@ impl Profile {
             kerberos: self.kerberos,
             initial: desktop_request(self.scale, LogicalSize::new(1024.0, 768.0), 1.0),
             monitors: Vec::new(),
+            video_decode: Default::default(),
             gateway: self
                 .gateway
                 .as_ref()

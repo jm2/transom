@@ -206,9 +206,11 @@ pub enum EngineEvent {
         scale: ScaleFactors,
         frame: SharedFrame,
     },
-    /// Regions of the shared frame that changed (remote pixels).
+    /// Regions of the shared frame that changed (remote pixels), and the video layers
+    /// (hardware-decoded H.264, ADR 0006) that changed in the same frame.
     FrameUpdate {
         damage: Vec<Rect>,
+        video: Vec<crate::video::VideoUpdate>,
     },
     /// The remote desktop size changed; the shared frame was resized.
     DesktopResized(Size),
@@ -340,6 +342,9 @@ pub enum EngineCommand {
         stream_id: u32,
         data: Option<Vec<u8>>,
     },
+    /// The renderer can't show the dmabufs of `FrameUpdate::video` (e.g. no GPU
+    /// import): stop hardware decoding and use the framebuffer for everything.
+    VideoUnsupported,
     Disconnect,
 }
 

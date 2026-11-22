@@ -1,0 +1,12 @@
+# Test image for the zero-copy H.264 path (ADR 0006, scripts/hwdec-check.sh): the
+# view-check image plus FFmpeg's full libavcodec and Mesa's VA-API driver with H.264
+# from RPM Fusion (Fedora's own builds leave H.264 out). Runs with the host's GPU
+# render node passed in (--device /dev/dri/renderD128); throwaway, test-only.
+FROM localhost/transom-test-grd
+USER root
+RUN dnf install -y --setopt=install_weak_deps=False \
+        "https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm" \
+    && dnf install -y --setopt=install_weak_deps=False \
+        libavcodec-freeworld mesa-va-drivers-freeworld mesa-vulkan-drivers libva-utils \
+    && dnf clean all
+USER rdp

@@ -15,5 +15,6 @@ pub mod profile;
 pub mod rdpfile;
 pub mod tiles;
 pub mod trust;
+pub mod video;
 
 pub use secrecy;

@@ -78,6 +78,11 @@ mod imp {
         pub frame: Option<SharedFrame>,
         pub desktop: Size,
         pub tiles: TileCache,
+        /// Hardware-decoded video layers by GFX surface (ADR 0006), drawn over the
+        /// tiles where their region says the video frame is current.
+        pub video: std::collections::HashMap<u16, VideoLayer>,
+        /// The renderer couldn't import a video frame; the engine was told to stop.
+        pub video_failed: bool,
         pub resize_available: bool,
         pub layout: LayoutTracker,
         pub layout_timer: Option<glib::SourceId>,
@@ -91,6 +96,13 @@ mod imp {
         /// widget-size-based single-monitor layout), and the last one sent.
         pub monitors: Option<Vec<RemoteMonitor>>,
         pub last_monitors: Option<Vec<RemoteMonitor>>,
+    }
+
+    #[derive(Debug)]
+    pub(super) struct VideoLayer {
+        pub texture: gdk::Texture,
+        pub origin: (u32, u32),
+        pub region: transom_view_core::video::Region,
     }
 
     #[glib::object_subclass]
@@ -244,6 +256,61 @@ mod imp {
                     snapshot.append_scaled_texture(tex, gtk::gsk::ScalingFilter::Linear, &rect);
                 }
             }
+            // Video layers: the whole frame, clipped to each rectangle of its region,
+            // with the same device-pixel rounding as the tiles underneath.
+            let dev = |x: f64, y: f64| {
+                (
+                    (vp.offset_x + (x - origin.0) * vp.ratio).round(),
+                    (vp.offset_y + (y - origin.1) * vp.ratio).round(),
+                )
+            };
+            for layer in inner.video.values() {
+                let (ox, oy) = (layer.origin.0 as f64, layer.origin.1 as f64);
+                let (fx0, fy0) = dev(ox, oy);
+                let (fx1, fy1) = dev(
+                    ox + layer.texture.width() as f64,
+                    oy + layer.texture.height() as f64,
+                );
+                let frect = graphene::Rect::new(
+                    fx0 as f32,
+                    fy0 as f32,
+                    (fx1 - fx0) as f32,
+                    (fy1 - fy0) as f32,
+                );
+                for r in layer.region.rects() {
+                    let r = Rect::new(
+                        r.x + layer.origin.0,
+                        r.y + layer.origin.1,
+                        r.width,
+                        r.height,
+                    );
+                    let r = match region {
+                        Some(reg) => match reg.intersect(r) {
+                            Some(r) => r,
+                            None => continue,
+                        },
+                        None => r,
+                    };
+                    let (x0, y0) = dev(r.x as f64, r.y as f64);
+                    let (x1, y1) = dev((r.x + r.width) as f64, (r.y + r.height) as f64);
+                    snapshot.push_clip(&graphene::Rect::new(
+                        x0 as f32,
+                        y0 as f32,
+                        (x1 - x0) as f32,
+                        (y1 - y0) as f32,
+                    ));
+                    if exact {
+                        snapshot.append_texture(&layer.texture, &frect);
+                    } else {
+                        snapshot.append_scaled_texture(
+                            &layer.texture,
+                            gtk::gsk::ScalingFilter::Linear,
+                            &frect,
+                        );
+                    }
+                    snapshot.pop();
+                }
+            }
             snapshot.restore();
             snapshot.pop();
         }
@@ -356,6 +423,86 @@ mod imp {
             ))
         }
 
+        /// Apply the video layer changes of a frame update (ADR 0006). A frame this
+        /// display can't import turns hardware decoding off for the session: the
+        /// engine copies the video pixels back and decodes in software from then on.
+        fn update_video(&self, updates: Vec<transom_view_core::video::VideoUpdate>) {
+            if updates.is_empty() {
+                return;
+            }
+            let display = self.obj().display();
+            // Only GTK's Vulkan renderer imports YCbCr dmabufs with the tiled layouts
+            // VA-API decodes into. With the GL renderer the texture is created anyway
+            // (the display advertises the Vulkan formats) and then drawn from a linear
+            // read of the tiled buffer: garbage. So anything else uses software.
+            let renderer_ok = self
+                .obj()
+                .native()
+                .and_then(|n| n.renderer())
+                .is_some_and(|r| r.type_().name().contains("Vulkan"));
+            let mut failed = false;
+            if !renderer_ok && !self.inner.borrow().video_failed {
+                tracing::info!("renderer can't show hardware-decoded video; software decoding");
+                failed = true;
+            }
+            {
+                let mut inner = self.inner.borrow_mut();
+                for u in updates {
+                    if failed || u.region.is_empty() || inner.video_failed {
+                        inner.video.remove(&u.surface);
+                        continue;
+                    }
+                    #[cfg(target_os = "linux")]
+                    let texture = match u.frame {
+                        Some(frame) => match crate::dmabuf::texture(&display, frame) {
+                            Ok(t) => Some(t),
+                            Err(e) => {
+                                tracing::warn!(
+                                    "can't show hardware-decoded video ({e}); software decoding"
+                                );
+                                failed = true;
+                                break;
+                            }
+                        },
+                        None => None,
+                    };
+                    // No dmabufs elsewhere (the engine never sends frames there).
+                    #[cfg(not(target_os = "linux"))]
+                    let texture: Option<gdk::Texture> = {
+                        let _ = (&display, u.frame);
+                        None
+                    };
+                    match (inner.video.get_mut(&u.surface), texture) {
+                        (Some(l), t) => {
+                            if let Some(t) = t {
+                                l.texture = t;
+                            }
+                            l.origin = u.origin;
+                            l.region = u.region;
+                        }
+                        (None, Some(texture)) => {
+                            inner.video.insert(
+                                u.surface,
+                                VideoLayer {
+                                    texture,
+                                    origin: u.origin,
+                                    region: u.region,
+                                },
+                            );
+                        }
+                        (None, None) => {}
+                    }
+                }
+                if failed {
+                    inner.video_failed = true;
+                    inner.video.clear();
+                }
+            }
+            if failed {
+                self.send(EngineCommand::VideoUnsupported);
+            }
+        }
+
         pub(super) fn send(&self, cmd: EngineCommand) {
             if let Some(leader) = self.leader.upgrade() {
                 leader.imp().send(cmd);
@@ -440,13 +587,16 @@ mod imp {
                         inner.frame = Some(frame);
                         inner.desktop = desktop;
                         inner.tiles.clear();
+                        inner.video.clear();
+                        inner.video_failed = false;
                     }
                     obj.queue_draw();
                     self.each_follower(|v| v.queue_draw());
                     obj.emit_by_name::<()>("connected", &[]);
                 }
-                EngineEvent::FrameUpdate { damage } => {
+                EngineEvent::FrameUpdate { damage, video } => {
                     self.inner.borrow_mut().tiles.mark(&damage);
+                    self.update_video(video);
                     obj.queue_draw();
                     self.each_follower(|v| v.queue_draw());
                 }
@@ -544,6 +694,8 @@ mod imp {
             inner.handle = None;
             inner.frame = None;
             inner.tiles.clear();
+            inner.video.clear();
+            inner.video_failed = false;
             inner.resize_available = false;
             inner.layout.reset();
             inner.pressed_keys.clear();
@@ -925,6 +1077,21 @@ impl TransomView {
             }
         });
         Ok(())
+    }
+
+    /// How much of the desktop (remote pixels) is currently shown from
+    /// hardware-decoded video layers (ADR 0006); 0 when everything comes from the
+    /// framebuffer. For diagnostics and tests.
+    pub fn video_area(&self) -> u64 {
+        self.imp()
+            .source()
+            .imp()
+            .inner
+            .borrow()
+            .video
+            .values()
+            .map(|l| l.region.area())
+            .sum()
     }
 
     /// Close the session, if any. `disconnected` is *not* emitted for a local

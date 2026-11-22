@@ -14,6 +14,9 @@
 //!   --screenshot F.png    with --check: also save the rendered widget
 //!   --resize-to WxH       resize the window 4 s after connecting (tests renegotiation)
 //!   --check-after-ms N    start checking N ms after connecting (default 3000)
+//!   --check-psnr DB       pass the check at PSNR >= DB instead of bit-exact (for
+//!                         hardware-decoded video, whose YCbCr conversion is the GPU's)
+//!   --video-decode M      auto | software | verify (ADR 0006)
 //!   --quit-after-ms N     disconnect cleanly and quit N ms after connecting
 //!   --multimon            one fullscreen window per monitor (multi-monitor layout);
 //!                         with --check, every monitor's window is checked
@@ -53,6 +56,8 @@ struct Args {
     resize_to: Option<(i32, i32)>,
     check_after_ms: u32,
     check_after_explicit: bool,
+    check_psnr: Option<f64>,
+    video_decode: transom_view_core::video::VideoDecode,
     quit_after_ms: Option<u64>,
     clip_test: bool,
     file_clip_test: bool,
@@ -82,6 +87,8 @@ fn parse() -> Result<Args, String> {
         resize_to: None,
         check_after_ms: 3000,
         check_after_explicit: false,
+        check_psnr: None,
+        video_decode: Default::default(),
         quit_after_ms: None,
         clip_test: false,
         file_clip_test: false,
@@ -131,6 +138,16 @@ fn parse() -> Result<Args, String> {
                 a.check_after_ms = val()?.parse().map_err(|_| "bad ms")?;
                 a.check_after_explicit = true;
             }
+            "--check-psnr" => a.check_psnr = Some(val()?.parse().map_err(|_| "bad dB")?),
+            "--video-decode" => {
+                use transom_view_core::video::VideoDecode;
+                a.video_decode = match val()?.as_str() {
+                    "auto" => VideoDecode::Auto,
+                    "software" => VideoDecode::Software,
+                    "verify" => VideoDecode::Verify,
+                    _ => return Err("--video-decode auto|software|verify".into()),
+                }
+            }
             "--clip-test" => a.clip_test = true,
             "--file-clip-test" => a.file_clip_test = true,
             "--multimon" => a.multimon = true,
@@ -160,6 +177,7 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    let _ = CHECK_PSNR.set(args.check_psnr);
     let app = gtk::Application::builder()
         .application_id("io.github.jm2.Transom.ViewDemo")
         .flags(gtk::gio::ApplicationFlags::NON_UNIQUE)
@@ -256,6 +274,7 @@ fn build(app: &gtk::Application, args: Args, code: Rc<Cell<u8>>) {
         initial: desktop_request(args.scale_mode, Default::default(), 1.0),
         monitors: Vec::new(),
         gateway: None,
+        video_decode: args.video_decode,
     };
 
     let app_weak = app.downgrade();
@@ -500,6 +519,9 @@ fn install_check(
     });
 }
 
+/// `--check-psnr`, set once in `main`.
+static CHECK_PSNR: std::sync::OnceLock<Option<f64>> = std::sync::OnceLock::new();
+
 fn run_check(view: &TransomView, screenshot: Option<&str>) -> bool {
     run_check_region(view, screenshot, None)
 }
@@ -568,8 +590,12 @@ fn run_check_region(
     let cx = origin.0 + (vw - fw as f64) / 2.0;
     let cy = origin.1 + (vh - fh as f64) / 2.0;
 
+    // In PSNR mode, alignment is chosen by squared error: with lossy video, equal-pixel
+    // counts can favour a neighbouring offset (chroma bleeds along edges).
+    let by_error = CHECK_PSNR.get().copied().flatten().is_some();
     let sample = |ox: i64, oy: i64, step: usize| -> (u64, u64) {
         let (mut total, mut equal) = (0u64, 0u64);
+        let mut sse = 0f64;
         for y in (0..fh).step_by(step) {
             let ty = y as i64 + oy;
             if ty < 0 || ty as usize >= th {
@@ -584,7 +610,16 @@ fn run_check_region(
                 let b = &bytes[ty as usize * stride + tx as usize * 4..][..3];
                 total += 1;
                 equal += (a == b) as u64;
+                sse += (0..3)
+                    .map(|i| (a[i] as f64 - b[i] as f64).powi(2))
+                    .sum::<f64>();
             }
+        }
+        if by_error {
+            // Score as "equal" = total scaled down by mean error (higher is better), so
+            // the comparison below picks the lowest error.
+            let mse = sse / (total.max(1) * 3) as f64;
+            equal = ((total as f64) / (1.0 + mse)) as u64;
         }
         (total, equal)
     };
@@ -598,9 +633,14 @@ fn run_check_region(
     let mut best = (ex, ey, 0u64, 0u64);
     let mut ties = 0;
     for (ox, oy) in cands {
-        let (t, e) = sample(ox, oy, 7);
+        // Full resolution in PSNR mode: a 1-in-7 subsample of lossy edges can rank a
+        // neighbouring offset first.
+        let (t, e) = sample(ox, oy, if by_error { 1 } else { 7 });
         if t == 0 {
             continue;
+        }
+        if std::env::var_os("TRANSOM_CHECK_DEBUG").is_some() {
+            println!("check: candidate ({ox},{oy}): {e}/{t}");
         }
         if e * best.2.max(1) > best.3 * t {
             best = (ox, oy, t, e);
@@ -615,9 +655,33 @@ fn run_check_region(
         );
     }
     let (ox, oy) = (best.0, best.1);
-    let (total, equal) = sample(ox, oy, 1);
+    let (total, equal) = if by_error {
+        let mut t = 0u64;
+        let mut e = 0u64;
+        for y in 0..fh {
+            let ty = y as i64 + oy;
+            if ty < 0 || ty as usize >= th {
+                continue;
+            }
+            for x in 0..fw {
+                let tx = x as i64 + ox;
+                if tx < 0 || tx as usize >= tw {
+                    continue;
+                }
+                let a = &f.pixels[(y + ry) * f.stride + (x + rx) * 4..][..3];
+                let b = &bytes[ty as usize * stride + tx as usize * 4..][..3];
+                t += 1;
+                e += (a == b) as u64;
+            }
+        }
+        (t, e)
+    } else {
+        sample(ox, oy, 1)
+    };
     // Diagnostics: how different are mismatching pixels, and where are they?
     let mut hist = [0u64; 4]; // max channel diff: 1, 2-3, 4-15, 16+
+    let mut sse = 0f64;
+    let mut n = 0u64;
     let mut bbox = (usize::MAX, usize::MAX, 0usize, 0usize);
     for y in 0..fh {
         let ty = y as i64 + oy;
@@ -632,6 +696,10 @@ fn run_check_region(
             let a = &f.pixels[(y + ry) * f.stride + (x + rx) * 4..][..3];
             let b = &bytes[ty as usize * stride + tx as usize * 4..][..3];
             let d = (0..3).map(|i| a[i].abs_diff(b[i])).max().unwrap_or(0);
+            n += 3;
+            sse += (0..3)
+                .map(|i| (a[i] as f64 - b[i] as f64).powi(2))
+                .sum::<f64>();
             if d > 0 {
                 hist[match d {
                     1 => 0,
@@ -670,14 +738,27 @@ fn run_check_region(
     }
     let pct = 100.0 * equal as f64 / total.max(1) as f64;
     let covered = 100.0 * total as f64 / (fw * fh) as f64;
-    let exact = equal == total && covered > 99.0;
+    let psnr = if sse == 0.0 {
+        f64::INFINITY
+    } else {
+        10.0 * (255.0f64 * 255.0 / (sse / n.max(1) as f64)).log10()
+    };
+    println!(
+        "check: PSNR {psnr:.2} dB; video layers cover {} px",
+        view.video_area()
+    );
+    let exact = match CHECK_PSNR.get().copied().flatten() {
+        Some(min) => psnr >= min && covered > 99.0,
+        None => equal == total && covered > 99.0,
+    };
     println!(
         "check: scale {s}, surface offset ({sx},{sy}), window {tw}x{th} device px, frame {fw}x{fh} at offset ({ox},{oy}); \
          {equal}/{total} pixels identical ({pct:.4}%), {covered:.2}% of frame visible -> {}",
-        if exact {
-            "PIXEL-EXACT"
-        } else {
-            "NOT pixel-exact"
+        match (exact, CHECK_PSNR.get().copied().flatten()) {
+            (true, None) => "PIXEL-EXACT".to_string(),
+            (false, None) => "NOT pixel-exact".to_string(),
+            (true, Some(min)) => format!("PSNR-OK (>= {min} dB)"),
+            (false, Some(min)) => format!("PSNR-FAILED (< {min} dB)"),
         }
     );
     exact
@@ -846,6 +927,7 @@ fn build_multimon(app: &gtk::Application, args: Args, code: Rc<Cell<u8>>) {
         initial: desktop_request(args.scale_mode, Default::default(), 1.0),
         monitors: layout.clone(),
         gateway: None,
+        video_decode: args.video_decode,
     };
     leader.connect_desktop_resized(|_, w, h| eprintln!("desktop resized: {w}x{h}"));
     let app2 = app.clone();

@@ -74,3 +74,18 @@ Windows sends later Kerberos requests back over the MS-RDPEAR channel.
   negotiation when Remote Credential Guard is requested. Transom retries once without it, and
   Kerberos to grd then works as before (`scripts/kerberos-check.sh`, with both FreeRDP
   builds).
+
+## Zero-copy video: when it applies
+
+Hardware H.264 (ADR 0006) needs each of these, and falls back to software otherwise:
+- **A full libavcodec.** Fedora's `libavcodec-free` has no native H.264 decoder; RPM
+  Fusion's `libavcodec-freeworld` does. In the Flatpak, the runtime's codecs-extra
+  extension provides it.
+- **A VA-API driver with H.264.** Fedora's Mesa build leaves it out; RPM Fusion's
+  `mesa-va-drivers-freeworld` and Intel's media driver include it.
+- **GTK's Vulkan renderer**, the default where Vulkan works. Under
+  `GSK_RENDERER=gl`, Transom stays in software, because GTK's GL renderer can't
+  import VA-API's tiled frames.
+- **A server that sends AVC420.** Windows uses AVC420 only for regions it detects as
+  video. Its whole-desktop H.264 is AVC444, which is decoded in software. xrdp sends
+  AVC420.

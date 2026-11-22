@@ -18,5 +18,12 @@ pub mod ffi {
 
 mod cliprdr;
 mod engine;
+#[cfg(transom_hwdec)]
+mod gfxvideo;
+#[cfg(not(transom_hwdec))]
+#[path = "gfxvideo_stub.rs"]
+mod gfxvideo;
+#[cfg(transom_hwdec)]
+mod hwdec;
 
 pub use engine::{FreeRdpEngine, h264_available};

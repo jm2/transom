@@ -6,6 +6,7 @@
 //!       [--gateway HOST[:PORT] [--gateway-trust SHA256]]   (RD Gateway, same credentials)
 //!       [--size WxH] [--scale S] [--out frame.png] [--settle-ms N]
 //!       [--audio] [--mic] [--stay-ms N]   (audio out / microphone in; stay N ms)
+//!       [--video-decode auto|software|verify]
 //!       [--kerberos]   (no password: use the Kerberos ticket in KRB5CCNAME)
 //! ```
 //!
@@ -42,6 +43,7 @@ struct Args {
     audio: bool,
     mic: bool,
     kerberos: bool,
+    video_decode: transom_view_core::video::VideoDecode,
     stay: Option<Duration>,
 }
 
@@ -61,6 +63,7 @@ fn parse() -> Result<Args, String> {
         password_file: None,
         trust: None,
         gateway: None,
+        video_decode: Default::default(),
         gateway_trust: None,
         size: (1280.0, 800.0),
         scale: 1.0,
@@ -106,6 +109,15 @@ fn parse() -> Result<Args, String> {
             "--audio" => a.audio = true,
             "--mic" => a.mic = true,
             "--kerberos" => a.kerberos = true,
+            "--video-decode" => {
+                use transom_view_core::video::VideoDecode;
+                a.video_decode = match val()?.as_str() {
+                    "auto" => VideoDecode::Auto,
+                    "software" => VideoDecode::Software,
+                    "verify" => VideoDecode::Verify,
+                    _ => return Err("--video-decode auto|software|verify".into()),
+                }
+            }
             "--stay-ms" => {
                 a.stay = Some(Duration::from_millis(val()?.parse().map_err(|_| "bad ms")?))
             }
@@ -150,6 +162,10 @@ fn write_png(path: &str, frame: &SharedFrame) -> Result<(u32, u32), String> {
 }
 
 fn main() -> ExitCode {
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_writer(std::io::stderr)
+        .init();
     let args = match parse() {
         Ok(a) => a,
         Err(e) => {
@@ -202,6 +218,7 @@ fn main() -> ExitCode {
         kerberos: args.kerberos,
         initial,
         monitors: Vec::new(),
+        video_decode: args.video_decode,
         gateway: args.gateway.clone().map(|(host, port)| {
             transom_view_core::config::GatewayConfig {
                 host,
@@ -253,7 +270,7 @@ fn main() -> ExitCode {
                 frame = Some(f);
                 last_update = Instant::now();
             }
-            Ok(EngineEvent::FrameUpdate { damage }) => {
+            Ok(EngineEvent::FrameUpdate { damage, .. }) => {
                 updates += 1;
                 last_update = Instant::now();
                 if updates <= 3 {

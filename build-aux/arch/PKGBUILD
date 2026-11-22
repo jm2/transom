@@ -7,7 +7,10 @@ pkgdesc="Sharp remote desktops over RDP (GTK 4, HiDPI-correct)"
 arch=(x86_64 aarch64)
 url="https://github.com/jm2/transom"
 license=(GPL-3.0-or-later Apache-2.0)
-depends=(freerdp gtk4 libadwaita libsecret hicolor-icon-theme)
+depends=(freerdp gtk4 libadwaita libsecret hicolor-icon-theme ffmpeg)
+optdepends=('libva-mesa-driver: hardware H.264 decoding on AMD (zero-copy video)'
+            'intel-media-driver: hardware H.264 decoding on Intel (zero-copy video)'
+            'vulkan-icd-loader: GTK''s Vulkan renderer, needed to show hardware-decoded video')
 makedepends=(cargo clang)
 source=("$pkgname-$pkgver.tar.gz" "$pkgname-$pkgver-vendor.tar.xz")
 sha256sums=(SKIP SKIP)

@@ -1,5 +1,7 @@
 # Throwaway gnome-remote-desktop (headless mode) test server.
 # Software rendering (llvmpipe); no GPU or host session needed.
+# libavcodec-free: the client examples run here link it (ADR 0006); Fedora's build
+# has no native H.264 decoder, so hardware decoding stays off (see ../hwdec).
 FROM registry.fedoraproject.org/fedora:45
 
 RUN dnf install -y --setopt=install_weak_deps=False \
@@ -9,6 +11,7 @@ RUN dnf install -y --setopt=install_weak_deps=False \
         dbus-daemon dbus-tools openssl procps-ng \
         adwaita-sans-fonts adwaita-mono-fonts adwaita-icon-theme \
         gnome-text-editor loupe python3-gobject python3-pyatspi \
+        libavcodec-free libavutil-free \
     && dnf clean all
 
 RUN useradd -m -u 1000 rdp

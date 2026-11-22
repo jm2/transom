@@ -92,6 +92,8 @@ pub struct SessionConfig {
     pub monitors: Vec<crate::monitors::RemoteMonitor>,
     /// Tunnel through an RD Gateway (MS-TSGU).
     pub gateway: Option<GatewayConfig>,
+    /// H.264 decoding: hardware to dmabufs where available (ADR 0006).
+    pub video_decode: crate::video::VideoDecode,
 }
 
 /// RD Gateway to connect through. The gateway's TLS certificate goes through the same
