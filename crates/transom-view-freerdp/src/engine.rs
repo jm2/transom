@@ -27,6 +27,8 @@ use transom_view_core::trust::{self, CertInfo};
 use crate::ffi;
 
 /// `FREERDP_PIXEL_FORMAT(32, BGRA, 0, 8, 8, 8)`: function-like macro, not bound.
+/// `WAIT_FAILED`: a cast macro in the Windows SDK, which bindgen can't evaluate there.
+const WAIT_FAILED: u32 = 0xFFFF_FFFF;
 const PIXEL_FORMAT_BGRX32: u32 = (32 << 24) | (4 << 16) | (8 << 8) | (8 << 4) | 8;
 /// `FREERDP_PIXEL_FORMAT(32, BGRA, 8, 8, 8, 8)`.
 const PIXEL_FORMAT_BGRA32: u32 = PIXEL_FORMAT_BGRX32 | (8 << 12);
@@ -398,7 +400,7 @@ unsafe fn event_loop(
         }
         // SAFETY: `n + 1` handles are initialised.
         let r = unsafe { ffi::WaitForMultipleObjects(n + 1, handles.as_ptr(), FALSE, 100) };
-        if r == ffi::WAIT_FAILED {
+        if r == WAIT_FAILED {
             return DisconnectReason::Protocol("WaitForMultipleObjects failed".into());
         }
         // Reset before draining so a wake during the drain isn't lost.
