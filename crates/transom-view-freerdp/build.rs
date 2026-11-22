@@ -179,7 +179,12 @@ fn target_clang_args() -> Vec<String> {
     match target.as_str() {
         t if t.ends_with("-pc-windows-gnullvm") || t.ends_with("-pc-windows-gnu") => {
             let arch = t.split('-').next().unwrap_or("x86_64");
-            vec![format!("--target={arch}-w64-windows-gnu")]
+            // mingw-w64 has no C11 <threads.h>, which WinPR includes unless the
+            // compiler says threads are unavailable (it then uses its _WIN32 path).
+            vec![
+                format!("--target={arch}-w64-windows-gnu"),
+                "-D__STDC_NO_THREADS__=1".into(),
+            ]
         }
         _ => Vec::new(),
     }
