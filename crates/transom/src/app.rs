@@ -250,7 +250,7 @@ pub fn run() -> glib::ExitCode {
     });
     // macOS delivers Finder's "Open With" (and `open file.rdp`) as an Apple Event,
     // which GTK forwards to the open signal, never to the command line. rdp:// links
-    // (kAEGetURL) aren't forwarded by GTK 4 at all yet.
+    // (kAEGetURL) come through transom-macos instead (below).
     #[cfg(target_os = "macos")]
     {
         let st = state.clone();
@@ -259,7 +259,11 @@ pub fn run() -> glib::ExitCode {
             let w = active_window(app, &s);
             w.window.present();
             for file in files {
-                open_rdp_file(&w, file, &file.uri());
+                if file.has_uri_scheme("rdp") {
+                    open_link(&w, &file.uri(), None);
+                } else {
+                    open_rdp_file(&w, file, &file.uri());
+                }
             }
         });
     }
@@ -297,7 +301,7 @@ pub fn run() -> glib::ExitCode {
 }
 
 /// Connect to an `rdp://` link (command line, or a link opened on macOS).
-fn open_link(w: &Rc<crate::window::MainWindow>, link: &str, password: Option<SecretString>) {
+fn open_link(w: &Rc<MainWindow>, link: &str, password: Option<SecretString>) {
     match transom_view::core::rdpfile::RdpFile::from_uri(link)
         .ok()
         .and_then(|f| transom_view::core::profile::Profile::from_rdp(&f))
