@@ -97,3 +97,16 @@ Windows 11 25H2 and Server 2025 accept it (device reply status 0). But no applic
 in the session can open it: `mode COM9` says "Device COM9 is not currently available",
 and no open request ever reaches the client. Drives and printers on the same channel
 work. Not yet compared with mstsc and a physical COM port.
+
+## USB: plugging in a device Transom can't open crashes it (FreeRDP 3.x)
+
+FreeRDP's USB channel crashes the client when it fails to open a device: `udev_free`
+runs on the `udev_init` failure path before the request queue exists (still the case
+in FreeRDP master, November 2026).
+
+- **At connect:** Transom checks the devices attached now and leaves out any it
+  can't open, so this doesn't happen.
+- **During the session:** a matching device plugged in that Transom has no access
+  to still triggers it with a distribution's FreeRDP. The Flatpak carries a fix
+  (`build-aux/flatpak/freerdp-urbdrc-open-failure.patch`). Give access before plugging
+  devices in (docs/usb.md, Permissions).

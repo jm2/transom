@@ -80,6 +80,9 @@ pub enum RedirectionProblem {
     MissingFolder(PathBuf),
     MissingPort(PathBuf),
     BadPortName(String),
+    /// A USB device the selector matches can't be redirected (no access, or an input
+    /// device or hub); the selector is dropped for the session.
+    Usb(String, UsbRefusal),
 }
 
 impl std::fmt::Display for RedirectionProblem {
@@ -88,12 +91,31 @@ impl std::fmt::Display for RedirectionProblem {
             Self::MissingFolder(p) => write!(f, "folder {} doesn't exist", p.display()),
             Self::MissingPort(p) => write!(f, "serial port {} doesn't exist", p.display()),
             Self::BadPortName(n) => write!(f, "\"{n}\" isn't a COM port name (COM1–COM256)"),
+            Self::Usb(dev, why) => write!(f, "USB device {dev}: {why}"),
         }
     }
 }
 
 /// The redirections that can actually be offered, and why the others can't.
 pub fn usable(r: &Redirections) -> (Redirections, Vec<RedirectionProblem>) {
+    let devices = if r.usb.is_empty() {
+        Vec::new()
+    } else {
+        usb_devices()
+    };
+    usable_with(r, &devices)
+}
+
+/// [`usable`] against a given list of attached USB devices.
+///
+/// A USB selector is dropped when a device it matches is attached now but can't be
+/// redirected. Besides the policy, this matters because FreeRDP (3.x, `udev_free` on
+/// the `udev_init` failure path) crashes the client when it can't open a device.
+/// Selectors that match nothing yet stay, for devices plugged in later.
+pub fn usable_with(
+    r: &Redirections,
+    devices: &[UsbDevice],
+) -> (Redirections, Vec<RedirectionProblem>) {
     let mut ok = r.clone();
     let mut problems = Vec::new();
     ok.drives.retain(|d| {
@@ -118,6 +140,17 @@ pub fn usable(r: &Redirections) -> (Redirections, Vec<RedirectionProblem>) {
             problems.push(RedirectionProblem::MissingPort(p.path.clone()));
         }
         exists
+    });
+    let policy = UsbPolicy::default();
+    ok.usb.retain(|sel| {
+        let mut good = true;
+        for d in devices.iter().filter(|d| d.selector() == *sel) {
+            if let Err(why) = usb_redirectable(d, &policy) {
+                problems.push(RedirectionProblem::Usb(d.label(), why));
+                good = false;
+            }
+        }
+        good
     });
     (ok, problems)
 }
@@ -361,6 +394,31 @@ mod tests {
         };
         assert_eq!(usb_redirectable(&dev(&[8]), &deny), Err(UsbRefusal::Denied));
         assert_eq!(dev(&[8]).label(), "ACME Stick (1234:5678)");
+    }
+
+    #[test]
+    fn usb_selectors_for_inaccessible_devices_are_dropped() {
+        let sel = |vid, pid| UsbSelector::VidPid { vid, pid };
+        let r = Redirections {
+            // Attached but no access; attached input device; not attached (kept).
+            usb: vec![
+                sel(0x1234, 0x5678),
+                sel(0x1234, 0x0003),
+                sel(0xabcd, 0x0001),
+            ],
+            ..Default::default()
+        };
+        let mut hid = dev(&[3]);
+        hid.pid = 0x0003;
+        let (ok, problems) = usable_with(&r, &[dev(&[0, 8]), hid]);
+        assert_eq!(ok.usb, vec![sel(0xabcd, 0x0001)]);
+        assert_eq!(
+            problems,
+            vec![
+                RedirectionProblem::Usb("ACME Stick (1234:5678)".into(), UsbRefusal::NoPermission),
+                RedirectionProblem::Usb("ACME Stick (1234:0003)".into(), UsbRefusal::InputDevice),
+            ]
+        );
     }
 
     #[test]

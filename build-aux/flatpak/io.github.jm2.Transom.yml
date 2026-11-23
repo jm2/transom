@@ -19,12 +19,39 @@ finish-args:
   - --socket=fallback-x11
   - --device=dri
   - --socket=pulseaudio    # remote audio and microphone
+  - --socket=pcsc          # smart card redirection (the host's pcscd)
+  - --socket=cups          # printer redirection (the host's CUPS)
+  # Folders for drive redirection come from the file chooser portal. USB
+  # redirection needs raw device access, which is left to the user:
+  # flatpak override --user --device=all io.github.jm2.Transom (docs/usb.md).
   # Passwords: libsecret uses the Secret portal inside the sandbox; no extra access.
 build-options:
   append-path: /usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/llvm23/bin
   env:
     LIBCLANG_PATH: /usr/lib/sdk/llvm23/lib
 modules:
+  # PC/SC client library for FreeRDP's smart card channel; it talks to the host's
+  # pcscd through --socket=pcsc. The daemon itself isn't needed.
+  - name: pcsc-lite
+    buildsystem: meson
+    config-opts:
+      - -Dlibsystemd=false
+      - -Dlibudev=false
+      - -Dpolkit=false
+      - -Dusb=false
+      - -Dserial=false
+    cleanup:
+      - /bin
+      - /sbin
+      - /share/man
+      - /share/doc
+      - /include
+      - /lib/pkgconfig
+    sources:
+      - type: archive
+        url: https://pcsclite.apdu.fr/files/pcsc-lite-2.5.4.tar.xz
+        sha256: 23b1c644ab4f13269d3a9ff26734f473f622deff6ed60492171a9a25f603f078
+
   - name: freerdp
     buildsystem: cmake-ninja
     builddir: true
@@ -43,8 +70,10 @@ modules:
       - -DWITH_PROXY=OFF
       - -DWITH_PLATFORM_SERVER=OFF
       - -DWITH_WINPR_TOOLS=OFF
-      - -DWITH_CUPS=OFF
-      - -DWITH_PCSC=OFF
+      # Device redirection (PLAN Phase 4b): printers, smart cards, USB (libusb is in
+      # the runtime).
+      - -DWITH_CUPS=ON
+      - -DWITH_PCSC=ON
       - -DWITH_SMARTCARD_EMULATE=OFF
       - -DWITH_FUSE=OFF
       # H.264 through FFmpeg: built against the SDK's libavcodec; the decoder itself
@@ -75,7 +104,7 @@ modules:
       # (MS-RDPEAR). Off by default upstream; scripts/ad-check.sh tests it.
       - -DCHANNEL_RDPEAR=ON
       - -DCHANNEL_RDPEAR_CLIENT=ON
-      - -DCHANNEL_URBDRC=OFF
+      - -DCHANNEL_URBDRC=ON
       - -DCHANNEL_RDPECAM_CLIENT=OFF
     cleanup:
       - /include
@@ -86,6 +115,9 @@ modules:
       - type: archive
         url: https://github.com/FreeRDP/FreeRDP/releases/download/3.33.1/freerdp-3.33.1.tar.gz
         sha256: 4431bbf04d370545cfe2924b9d9f116b95c90c64ff156b2550bbaf82d34e7124
+      # A USB device that can't be opened crashed the client (not yet upstream).
+      - type: patch
+        path: freerdp-urbdrc-open-failure.patch
 
   - name: transom
     buildsystem: simple
