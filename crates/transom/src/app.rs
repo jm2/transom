@@ -155,13 +155,31 @@ thread_local! {
     static CLI_PASSWORD: RefCell<Option<SecretString>> = const { RefCell::new(None) };
 }
 
+/// See the `connect_open` handler in [`run`]: only macOS routes files through `open`.
+#[cfg(target_os = "macos")]
+const OPEN_FLAGS: gio::ApplicationFlags = gio::ApplicationFlags::HANDLES_OPEN;
+#[cfg(not(target_os = "macos"))]
+const OPEN_FLAGS: gio::ApplicationFlags = gio::ApplicationFlags::empty();
+
+/// Imports a `.rdp` file; `fallback` names it if it has no basename.
+fn open_rdp_file(w: &Rc<MainWindow>, file: &gio::File, fallback: &str) {
+    let name = file
+        .basename()
+        .map(|b| b.to_string_lossy().into_owned())
+        .unwrap_or_else(|| fallback.to_owned());
+    match file.load_contents(gio::Cancellable::NONE) {
+        Ok((bytes, _)) => w.open_rdp_bytes(&bytes, &name),
+        Err(e) => w.toast(&format!("Couldn't open {name}: {e}")),
+    }
+}
+
 pub fn run() -> glib::ExitCode {
     let app = adw::Application::builder()
         .application_id(APP_ID)
         // Command line, not HANDLES_OPEN: GIO's GFile parsing mangles Microsoft-style
         // links (rdp://full%20address=s:host:port&… becomes rdp://full%20address=s:0/),
-        // so rdp:// arguments must be read raw.
-        .flags(gio::ApplicationFlags::HANDLES_COMMAND_LINE)
+        // so rdp:// arguments must be read raw. macOS also needs HANDLES_OPEN (below).
+        .flags(gio::ApplicationFlags::HANDLES_COMMAND_LINE | OPEN_FLAGS)
         .build();
     app.add_main_option(
         "password-file",
@@ -225,19 +243,26 @@ pub fn run() -> glib::ExitCode {
                 let password = CLI_PASSWORD.with(|c| c.borrow_mut().take());
                 open_link(&w, &t, password);
             } else {
-                let file = cmd.create_file_for_arg(&t);
-                let name = file
-                    .basename()
-                    .map(|b| b.to_string_lossy().into_owned())
-                    .unwrap_or(t.clone());
-                match file.load_contents(gio::Cancellable::NONE) {
-                    Ok((bytes, _)) => w.open_rdp_bytes(&bytes, &name),
-                    Err(e) => w.toast(&format!("Couldn't open {name}: {e}")),
-                }
+                open_rdp_file(&w, &cmd.create_file_for_arg(&t), &t);
             }
         }
         glib::ExitCode::SUCCESS
     });
+    // macOS delivers Finder's "Open With" (and `open file.rdp`) as an Apple Event,
+    // which GTK forwards to the open signal, never to the command line. rdp:// links
+    // (kAEGetURL) aren't forwarded by GTK 4 at all yet.
+    #[cfg(target_os = "macos")]
+    {
+        let st = state.clone();
+        app.connect_open(move |app, files, _hint| {
+            let Some(s) = st.borrow().clone() else { return };
+            let w = active_window(app, &s);
+            w.window.present();
+            for file in files {
+                open_rdp_file(&w, file, &file.uri());
+            }
+        });
+    }
     let st = state.clone();
     app.connect_shutdown(move |_| {
         if let Some(s) = st.borrow().as_ref() {
