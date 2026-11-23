@@ -293,6 +293,10 @@ pub fn run() -> glib::ExitCode {
                 w.window.present();
                 open_link(&w, &url, None);
             });
+            // The event is handled inside GDK's NSRunLoop wait, which an idle source
+            // added from this thread doesn't interrupt: without a wakeup the link waits
+            // for the next unrelated event (mouse, focus) when the app is already running.
+            glib::MainContext::default().wakeup();
         });
     }
 
