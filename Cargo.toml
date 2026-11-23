@@ -5,6 +5,7 @@ members = [
     "crates/transom-view-freerdp",
     "crates/transom-view",
     "crates/transom-view-capi",
+    "crates/transom-macos",
     "crates/transom",
 ]
 default-members = ["crates/transom-view-core"]
@@ -22,6 +23,7 @@ authors = ["Transom Contributors"]
 transom-view-core = { path = "crates/transom-view-core", version = "0.0.1" }
 transom-view-freerdp = { path = "crates/transom-view-freerdp", version = "0.0.1" }
 transom-view = { path = "crates/transom-view", version = "0.0.1" }
+transom-macos = { path = "crates/transom-macos", version = "0.0.1" }
 
 adw = { version = "0.9", package = "libadwaita", features = ["v1_6"] }
 gtk = { version = "0.11", package = "gtk4", features = ["v4_16"] }

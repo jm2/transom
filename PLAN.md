@@ -285,7 +285,8 @@ Integration tests against a headless grd in a VM are optional, behind `--feature
 
 - Run `scripts/verify.sh` (fmt, clippy -D warnings, tests, cargo-deny) before every commit;
   create it in Phase 0.
-- `unsafe` lives **only** in `transom-view-freerdp` (FFI) and `transom-view-capi`. Every `unsafe` block
+- `unsafe` lives **only** in `transom-view-freerdp` (FFI), `transom-view-capi` and
+  `transom-macos` (Objective-C: Apple Events for links). Every `unsafe` block
   gets a `// SAFETY:` comment.
 - No new dependencies without a one-line justification in the commit message. Prefer
   well-maintained crates; no network access at runtime except the RDP connection itself.

@@ -223,13 +223,7 @@ pub fn run() -> glib::ExitCode {
         for t in targets {
             if t.to_ascii_lowercase().starts_with("rdp://") {
                 let password = CLI_PASSWORD.with(|c| c.borrow_mut().take());
-                match transom_view::core::rdpfile::RdpFile::from_uri(&t)
-                    .ok()
-                    .and_then(|f| transom_view::core::profile::Profile::from_rdp(&f))
-                {
-                    Some(p) => w.open_session(p, true, password),
-                    None => w.toast(&format!("Invalid link: {t}")),
-                }
+                open_link(&w, &t, password);
             } else {
                 let file = cmd.create_file_for_arg(&t);
                 let name = file
@@ -251,8 +245,41 @@ pub fn run() -> glib::ExitCode {
         }
     });
 
+    // macOS delivers links as Apple Events, which GTK doesn't forward (see
+    // transom-macos). Registered before the app runs, so the link an app launch was
+    // started for isn't missed; the handler runs on the main thread.
+    #[cfg(target_os = "macos")]
+    {
+        let app = app.downgrade();
+        let st = state.clone();
+        transom_macos::on_open_url(move |url| {
+            let (app, st) = (app.clone(), st.clone());
+            // From the main loop: at launch the event can come before startup.
+            glib::idle_add_local_once(move || {
+                let (Some(app), Some(s)) = (app.upgrade(), st.borrow().clone()) else {
+                    tracing::warn!("link before the app started: {url}");
+                    return;
+                };
+                let w = active_window(&app, &s);
+                w.window.present();
+                open_link(&w, &url, None);
+            });
+        });
+    }
+
     crate::dev::install(&app);
     app.run()
+}
+
+/// Connect to an `rdp://` link (command line, or a link opened on macOS).
+fn open_link(w: &Rc<crate::window::MainWindow>, link: &str, password: Option<SecretString>) {
+    match transom_view::core::rdpfile::RdpFile::from_uri(link)
+        .ok()
+        .and_then(|f| transom_view::core::profile::Profile::from_rdp(&f))
+    {
+        Some(p) => w.open_session(p, true, password),
+        None => w.toast(&format!("Invalid link: {link}")),
+    }
 }
 
 fn setup_app_actions(app: &adw::Application, state: &Rc<AppState>) {

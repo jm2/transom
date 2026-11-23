@@ -23,6 +23,7 @@ GitHub release.
 | Kerberos SSO, Remote Credential Guard | FreeRDP build with RDPEAR (Flatpak) | Homebrew FreeRDP (no RDPEAR) | MSYS2 FreeRDP (no RDPEAR) |
 | USB redirection | libusb (udev permission, `docs/usb.md`) | not yet: no device list (FreeRDP could; only devices without a kernel driver) | not yet: no device list (devices would need WinUSB) |
 | Drives, printers, smart cards | yes | yes | yes |
+| `rdp://` links, `.rdp` files | desktop file (`x-scheme-handler/rdp`) | Info.plist; links via an Apple Event handler (`transom-macos`) | installer registry entries |
 
 Verified in the Windows 11 test VM (2026-11-22): `build-windows.ps1 -InnoSetup` builds
 the installer (Inno Setup 6.7); a silent install registers `rdp:` and the `Transom.rdp`
