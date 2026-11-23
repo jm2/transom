@@ -423,6 +423,9 @@ mod tests {
 
     #[test]
     fn unusable_redirections_are_dropped_with_reasons() {
+        // An existing file stands in for the serial device on every platform.
+        let port = std::env::temp_dir().join(format!("transom-port-{}", std::process::id()));
+        std::fs::write(&port, "").unwrap();
         let r = Redirections {
             drives: vec![DriveShare {
                 name: "x".into(),
@@ -431,21 +434,24 @@ mod tests {
             serial_ports: vec![
                 SerialPort {
                     name: "LPT1".into(),
-                    path: "/dev/null".into(),
+                    path: port.clone(),
                 },
                 SerialPort {
                     name: "COM3".into(),
-                    path: "/dev/null".into(),
+                    path: port.clone(),
                 },
             ],
             ..Default::default()
         };
         let (ok, problems) = usable(&r);
+        std::fs::remove_file(&port).unwrap();
         assert!(ok.drives.is_empty());
         assert_eq!(ok.serial_ports.len(), 1);
         assert_eq!(problems.len(), 2);
     }
 
+    // sysfs entry names contain ':', which Windows doesn't allow in file names.
+    #[cfg(unix)]
     #[test]
     fn sysfs_enumeration() {
         let t = std::env::temp_dir().join(format!("transom-usb-{}", std::process::id()));
