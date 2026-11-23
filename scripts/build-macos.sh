@@ -56,6 +56,10 @@ cp "$BREW"/share/glib-2.0/schemas/*.xml "$C/Resources/share/glib-2.0/schemas/"
 glib-compile-schemas "$C/Resources/share/glib-2.0/schemas"
 cp -RL "$BREW/lib/gdk-pixbuf-2.0" "$C/Resources/lib/"
 rm -f "$C/Resources/lib/gdk-pixbuf-2.0/2.10.0/loaders.cache"
+# librsvg installs its loader as both .so and .dylib; only .so is registered.
+for d in "$C"/Resources/lib/gdk-pixbuf-2.0/2.10.0/loaders/*.dylib; do
+    [[ -f ${d%.dylib}.so ]] && rm -f "$d"
+done
 iconutil -c icns data/transom.iconset -o "$C/Resources/transom.icns"
 cp COPYING build-aux/packaging/THIRD-PARTY-NOTICES.txt "$C/Resources/"
 
@@ -75,8 +79,10 @@ resolve() { # LIBREF BIN → source path
     esac
 }
 process() { # BIN: copy its non-system dependencies, rewrite references; echo new libs
-    local bin=$1 ref src base
+    local bin=$1 ref src base self
+    self=$(otool -D "$bin" | tail -n +2)   # a dylib's own install name isn't a dependency
     while read -r ref; do
+        [[ -n $self && $ref == "$self" ]] && continue
         case $ref in /usr/lib/*|/System/*) continue ;; esac
         src=$(resolve "$ref" "$bin") || fail "can't resolve $ref (from $bin)"
         base=$(basename "$src")
@@ -86,11 +92,14 @@ process() { # BIN: copy its non-system dependencies, rewrite references; echo ne
             echo "$C/Frameworks/$base"
         fi
         install_name_tool -change "$ref" "$fw/$base" "$bin" 2>/dev/null
-    done < <(otool -L "$bin" | tail -n +2 | awk '{print $1}' | grep -v "^$(basename "$bin")$")
+    done < <(otool -L "$bin" | tail -n +2 | awk '{print $1}')
 }
 queue=("$C/MacOS/transom-bin" "$C/MacOS/gdk-pixbuf-query-loaders")
-while IFS= read -r -d '' l; do chmod u+w "$l"; queue+=("$l"); done \
-    < <(find "$C/Resources/lib/gdk-pixbuf-2.0" -name '*.so' -print0)
+while IFS= read -r -d '' l; do
+    chmod u+w "$l"; queue+=("$l")
+    # Loaders are dlopen()ed by path; give any that carry a Homebrew install name a local one.
+    [[ -n $(otool -D "$l" | tail -n +2) ]] && install_name_tool -id "@loader_path/$(basename "$l")" "$l" 2>/dev/null
+done < <(find "$C/Resources/lib/gdk-pixbuf-2.0" \( -name '*.so' -o -name '*.dylib' \) -print0)
 passes=0
 while (( ${#queue[@]} )); do
     next=()
@@ -117,7 +126,8 @@ cache_dir="${HOME}/Library/Caches/io.github.jm2.Transom"
 mkdir -p "$cache_dir"
 export GDK_PIXBUF_MODULE_FILE="$cache_dir/loaders.cache"
 export GDK_PIXBUF_MODULEDIR="$R/lib/gdk-pixbuf-2.0/2.10.0/loaders"
-"$C/MacOS/gdk-pixbuf-query-loaders" > "$GDK_PIXBUF_MODULE_FILE.tmp" 2>/dev/null \
+# GLib prints debug messages on stdout: keep them out of the cache.
+G_MESSAGES_DEBUG= "$C/MacOS/gdk-pixbuf-query-loaders" > "$GDK_PIXBUF_MODULE_FILE.tmp" 2>/dev/null \
     && mv "$GDK_PIXBUF_MODULE_FILE.tmp" "$GDK_PIXBUF_MODULE_FILE"
 exec "$C/MacOS/transom-bin" "$@"
 SH
@@ -168,15 +178,24 @@ codesign --force --sign - "$C/MacOS/gdk-pixbuf-query-loaders" "$C/MacOS/transom-
 codesign --force --deep --sign - "$APP"
 codesign --verify --deep --strict "$APP"
 # No reference may point outside the bundle (or at Homebrew).
-if otool -L "$C/MacOS/transom-bin" "$C"/Frameworks/*.dylib | grep -E "^\s+$BREW|^\s+/usr/local|^\s+/opt/homebrew"; then
+machos=("$C/MacOS/transom-bin" "$C/MacOS/gdk-pixbuf-query-loaders")
+while IFS= read -r -d '' f; do machos+=("$f"); done \
+    < <(find "$C/Frameworks" "$C/Resources/lib" -type f \( -name '*.dylib' -o -name '*.so' \) -print0)
+if otool -L "${machos[@]}" | grep -E "^\s+($BREW|/usr/local|/opt/homebrew|@rpath/)"; then
     fail "the bundle still references Homebrew libraries"
 fi
 info "wrote $APP (minimum macOS ${minos:-12.0})"
 
 if (( DMG )); then
     command -v create-dmg >/dev/null || fail "create-dmg not found (brew install create-dmg)"
-    rm -f dist/Transom.dmg
-    create-dmg --volname Transom --app-drop-link 450 120 --icon Transom.app 150 120 \
-        --window-size 600 300 dist/Transom.dmg "$APP"
+    rm -f dist/Transom.dmg dist/rw.*.Transom.dmg
+    dmg_args=(--volname Transom --app-drop-link 450 120 --icon Transom.app 150 120 --window-size 600 300)
+    # The window layout is applied by scripting Finder, which needs a GUI login and
+    # Automation permission; without them, build a plain (unstyled) DMG.
+    if ! create-dmg "${dmg_args[@]}" dist/Transom.dmg "$APP"; then
+        echo "build-macos: Finder layout failed; building the DMG without it" >&2
+        rm -f dist/Transom.dmg dist/rw.*.Transom.dmg
+        create-dmg "${dmg_args[@]}" --skip-jenkins dist/Transom.dmg "$APP"
+    fi
     info "wrote dist/Transom.dmg"
 fi
