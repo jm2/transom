@@ -228,11 +228,14 @@ jobs:
         run: >-
           dnf install -y --setopt=install_weak_deps=False git gcc clang-devel pkgconf-pkg-config
           rustup freerdp-devel libwinpr-devel gtk4-devel libadwaita-devel libsecret-devel
-          libavcodec-free-devel libavutil-free-devel
+          libavcodec-free-devel libavutil-free-devel rpm-build
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.prepare.outputs.build_ref }}
           persist-credentials: false
+      # rpm-build provides find-requires, which cargo-generate-rpm uses for the
+      # automatic library requirements; its built-in fallback emits glibc "[WEAK]"
+      # symbol versions that nothing provides.
       - name: Build .rpm
         run: |
           rustup-init -y --profile minimal
@@ -263,7 +266,8 @@ jobs:
         run: |
           useradd -m builder
           chown -R builder .
-          su builder -c 'scripts/dist.sh && cd build-aux/arch && makepkg --noconfirm --nodeps'
+          # dist.sh writes the source tarballs to dist/; makepkg wants them beside the PKGBUILD.
+          su builder -c 'scripts/dist.sh && cp dist/transom-*.tar.* build-aux/arch/ && cd build-aux/arch && makepkg --noconfirm --nodeps'
           mkdir -p dist
           cp build-aux/arch/transom-*.pkg.tar.zst dist/transom-x86_64.pkg.tar.zst
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
