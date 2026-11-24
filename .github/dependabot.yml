@@ -1,13 +1,22 @@
 # Keep the SHA-pinned GitHub Actions and the Cargo dependencies current (as the
-# sibling projects do); PRs go through CI like any other change.
+# sibling projects do); PRs go through CI like any other change. Clean
+# semver-patch updates merge themselves once the required checks pass:
+# .github/workflows/dependabot-automerge.yml.
+#
+# `cooldown` delays version-update PRs until a few days after a release, giving
+# bad or yanked releases time to be pulled before they can be auto-merged.
 version: 2
 updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 5
   - package-ecosystem: cargo
     directory: /
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    cooldown:
+      default-days: 5
