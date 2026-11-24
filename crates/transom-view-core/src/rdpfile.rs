@@ -10,7 +10,14 @@
 //!   `&`-separated and percent-encoded);
 //! - simple: `rdp://[user[;domain]@]host[:port]` (Remmina, GNOME Connections).
 
+use std::collections::HashMap;
 use std::fmt;
+
+/// Largest `.rdp` file or `rdp://` URI accepted. Real files are a few kilobytes; the
+/// cap keeps a hostile file from tying up the UI thread.
+pub const MAX_INPUT_BYTES: usize = 1024 * 1024;
+/// Most distinct settings kept from one file (mstsc knows about 150).
+pub const MAX_ENTRIES: usize = 2048;
 
 /// A typed value from an `.rdp` file.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,6 +56,8 @@ pub enum RdpFileError {
     NotRdpUri,
     #[error("invalid URI: {0}")]
     BadUri(String),
+    #[error("too large (more than {} KiB)", MAX_INPUT_BYTES / 1024)]
+    TooLarge,
 }
 
 /// An ordered, case-insensitive set of `.rdp` settings.
@@ -65,15 +74,29 @@ impl RdpFile {
 
     /// Parse file bytes: UTF-16LE/BE (with or without BOM) or UTF-8 (with or without BOM).
     pub fn parse_bytes(bytes: &[u8]) -> Result<Self, RdpFileError> {
+        if bytes.len() > MAX_INPUT_BYTES {
+            return Err(RdpFileError::TooLarge);
+        }
         Ok(Self::parse_str(&decode_text(bytes)?))
     }
 
-    /// Parse text. Malformed lines are skipped (mstsc does the same).
+    /// Parse text. Malformed lines (and lines with control characters) are skipped, as
+    /// mstsc skips malformed lines; at most [`MAX_ENTRIES`] distinct keys are kept.
     pub fn parse_str(text: &str) -> Self {
         let mut f = Self::new();
+        let mut index: HashMap<String, usize> = HashMap::new();
         for line in text.lines() {
-            if let Some((k, v)) = parse_line(line.trim_end_matches('\r')) {
-                f.set(&k, v);
+            let Some((k, v)) = parse_line(line.trim_end_matches('\r')) else {
+                continue;
+            };
+            let k = k.to_ascii_lowercase();
+            match index.get(&k) {
+                Some(&i) => f.entries[i].1 = v,
+                None if f.entries.len() < MAX_ENTRIES => {
+                    index.insert(k.clone(), f.entries.len());
+                    f.entries.push((k, v));
+                }
+                None => {}
             }
         }
         f
@@ -155,6 +178,9 @@ impl RdpFile {
             .strip_prefix("rdp://")
             .or_else(|| uri.strip_prefix("RDP://"))
             .ok_or(RdpFileError::NotRdpUri)?;
+        if uri.len() > MAX_INPUT_BYTES {
+            return Err(RdpFileError::TooLarge);
+        }
         let rest = rest.trim_end_matches('/');
         if rest.is_empty() {
             return Err(RdpFileError::BadUri("empty".into()));
@@ -181,6 +207,9 @@ impl RdpFile {
             Some((u, h)) => (Some(percent_decode(u)?), h),
             None => (None, authority),
         };
+        if userinfo.as_deref().is_some_and(has_control) || has_control(hostport) {
+            return Err(RdpFileError::BadUri("control characters".into()));
+        }
         let (host, port) = split_host_port(hostport)
             .ok_or_else(|| RdpFileError::BadUri(format!("bad host {hostport:?}")))?;
         f.set_str("full address", join_host_port(&host, port));
@@ -210,8 +239,17 @@ impl RdpFile {
     }
 }
 
+/// Control characters other than tab. A value with a CR or LF could otherwise smuggle
+/// extra settings into an exported file.
+fn has_control(s: &str) -> bool {
+    s.chars().any(|c| c.is_control() && c != '\t')
+}
+
 /// `key:type:value` → `(key, value)`.
 fn parse_line(line: &str) -> Option<(String, RdpValue)> {
+    if has_control(line) {
+        return None;
+    }
     let (key, rest) = line.split_once(':')?;
     let (ty, value) = rest.split_once(':')?;
     let key = key.trim();
@@ -412,5 +450,30 @@ mod tests {
         assert_eq!(split_host_port("[::1]x"), None);
         assert_eq!(join_host_port("::1", Some(3389)), "[::1]");
         assert_eq!(join_host_port("h", Some(4000)), "h:4000");
+    }
+
+    #[test]
+    fn hostile_input_is_bounded() {
+        // Lines with control characters are dropped, so a value can't carry extra lines.
+        let f = RdpFile::parse_str("full address:s:pc\nusername:s:bob\u{1b}x\n");
+        assert_eq!(f.get_str("username"), None);
+        assert_eq!(f.get_str("full address"), Some("pc"));
+        // A percent-encoded CRLF in a link is rejected, not decoded into a new setting.
+        let uri = "rdp://full%20address=s:pc&username=s:bob%0D%0Adrivestoredirect:s:*";
+        assert!(RdpFile::from_uri(uri).is_err());
+        assert!(RdpFile::from_uri("rdp://bob%0A@pc").is_err());
+        // Size and entry caps.
+        assert_eq!(
+            RdpFile::parse_bytes(&vec![b'a'; MAX_INPUT_BYTES + 1]),
+            Err(RdpFileError::TooLarge)
+        );
+        let many: String = (0..MAX_ENTRIES + 10)
+            .map(|i| format!("k{i}:i:1\n"))
+            .collect();
+        assert_eq!(RdpFile::parse_str(&many).iter().count(), MAX_ENTRIES);
+        // Repeated keys keep their first position and the last value.
+        let f = RdpFile::parse_str("a:i:1\nb:i:2\nA:i:3\n");
+        assert_eq!(f.iter().map(|(k, _)| k).collect::<Vec<_>>(), ["a", "b"]);
+        assert_eq!(f.get_int("a"), Some(3));
     }
 }
