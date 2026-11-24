@@ -5,11 +5,11 @@
 # reached at localhost:13389 (scripts/test-servers.sh up).
 #
 #   scripts/app-shot.sh NAME SCALE SECONDS [--seed-trust] [--seed-profile] [-- transom args...]
-#   -> ${TMPDIR:-/var/tmp}/transom-test/app-NAME.png
+#   -> ${TMPDIR:-/var/tmp}/transom-test-UID/app-NAME.png
 set -euo pipefail
 cd "$(dirname "$0")/.."
 NAME=${1:?name}; SCALE=${2:?scale}; SECS=${3:?seconds}; shift 3
-STATE="${TMPDIR:-/var/tmp}/transom-test"
+source scripts/lib/state.sh
 CFG="$STATE/app-config-$NAME"
 rm -rf "$CFG"; mkdir -p "$CFG/transom/profiles"
 fp=$(podman logs transom-grd 2>/dev/null | sed -n 's/^TLS fingerprint: //p' | tail -1 || true)

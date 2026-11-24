@@ -20,7 +20,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT=${TRANSOM_VM_DIR:-$HOME/.local/share/transom-testvm}
-STATE="${TMPDIR:-/var/tmp}/transom-test"
+source scripts/lib/state.sh
 K=$STATE/ad
 w() { scripts/winvm.sh "$@"; }
 [[ -f $ROOT/domain/alice.pw ]] || { echo "no test domain: scripts/ad-setup.sh" >&2; exit 2; }
@@ -66,8 +66,10 @@ rm -f "$K/alice.pw"   # from here on only the ticket exists on the client side
 trap 'rm -f "$K"/krb5cc_*' EXIT
 
 since=$(w exec server '(Get-Date).ToUniversalTime().ToString("o")' | tr -d '\r')
-# Default: the RDPEAR build from scripts/build-freerdp-rdpear.sh, when it exists.
-[[ -z ${FREERDP_LIBDIR+x} && -d $STATE/freerdp-rdpear/lib64 ]] && FREERDP_LIBDIR=$STATE/freerdp-rdpear/lib64
+# Default: the RDPEAR build from scripts/build-freerdp-rdpear.sh, when it exists and,
+# like $STATE, is a directory of this user's (it goes on LD_LIBRARY_PATH).
+[[ -z ${FREERDP_LIBDIR+x} ]] && owned_dir "$STATE/freerdp-rdpear" && owned_dir "$STATE/freerdp-rdpear/lib64" &&
+    FREERDP_LIBDIR=$STATE/freerdp-rdpear/lib64
 lib=()
 [[ -n ${FREERDP_LIBDIR:-} ]] && echo "FreeRDP from $FREERDP_LIBDIR"
 [[ -n ${FREERDP_LIBDIR:-} ]] && lib=(-e LD_LIBRARY_PATH=/fr -v "$(realpath "$FREERDP_LIBDIR"):/fr:ro,Z")

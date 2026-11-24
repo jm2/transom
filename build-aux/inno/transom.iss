@@ -79,29 +79,31 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
-Name: "rdpfiles"; Description: "Open .rdp files and rdp:// links with Transom"; GroupDescription: "File associations:"
+Name: "rdpfiles"; Description: "Open .rdp files and rdp:// links with Transom"; GroupDescription: "File associations:"; Flags: unchecked
 
 [InstallDelete]
 ; Upgrades replace the app-owned tree wholesale (no stale DLLs, loaders or licence
-; files of packages a newer build no longer bundles).
-Type: filesandordirs; Name: "{app}\bin"
-Type: filesandordirs; Name: "{app}\lib"
-Type: filesandordirs; Name: "{app}\share"
-Type: filesandordirs; Name: "{app}\licenses"
+; files of packages a newer build no longer bundles). Only over an earlier Transom
+; install: never in an existing folder picked for a fresh one.
+Type: filesandordirs; Name: "{app}\bin"; Check: IsTransomUpgrade
+Type: filesandordirs; Name: "{app}\lib"; Check: IsTransomUpgrade
+Type: filesandordirs; Name: "{app}\share"; Check: IsTransomUpgrade
+Type: filesandordirs; Name: "{app}\licenses"; Check: IsTransomUpgrade
 
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Registry]
-; .rdp files (Remote Desktop Connection files) and rdp:// links. HKA = HKLM for an
-; admin install, HKCU for a per-user one. Existing handlers (mstsc) keep their
-; ProgID; Transom is added to "Open with" and becomes the default only through the
-; task above.
+; .rdp files (Remote Desktop Connection files) and rdp:// links, only with the (opt-in)
+; rdpfiles task. HKA = HKLM for an admin install, HKCU for a per-user one. Existing
+; .rdp handlers (mstsc) keep their ProgID; Transom is added to "Open with". The rdp
+; key is shared with other clients, so the uninstaller removes it only while it still
+; opens Transom ([Code], CurUninstallStepChanged), not with uninsdeletekey.
 Root: HKA; Subkey: "Software\Classes\Transom.rdp"; ValueType: string; ValueData: "Remote Desktop Connection"; Flags: uninsdeletekey; Tasks: rdpfiles
 Root: HKA; Subkey: "Software\Classes\Transom.rdp\DefaultIcon"; ValueType: string; ValueData: "{app}\bin\transom.exe,0"; Tasks: rdpfiles
 Root: HKA; Subkey: "Software\Classes\Transom.rdp\shell\open\command"; ValueType: string; ValueData: """{app}\bin\transom.exe"" ""%1"""; Tasks: rdpfiles
 Root: HKA; Subkey: "Software\Classes\.rdp\OpenWithProgids"; ValueType: string; ValueName: "Transom.rdp"; ValueData: ""; Flags: uninsdeletevalue; Tasks: rdpfiles
-Root: HKA; Subkey: "Software\Classes\rdp"; ValueType: string; ValueData: "URL:Remote Desktop Protocol"; Flags: uninsdeletekey; Tasks: rdpfiles
+Root: HKA; Subkey: "Software\Classes\rdp"; ValueType: string; ValueData: "URL:Remote Desktop Protocol"; Tasks: rdpfiles
 Root: HKA; Subkey: "Software\Classes\rdp"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""; Tasks: rdpfiles
 Root: HKA; Subkey: "Software\Classes\rdp\DefaultIcon"; ValueType: string; ValueData: "{app}\bin\transom.exe,0"; Tasks: rdpfiles
 Root: HKA; Subkey: "Software\Classes\rdp\shell\open\command"; ValueType: string; ValueData: """{app}\bin\transom.exe"" ""%1"""; Tasks: rdpfiles
@@ -113,3 +115,29 @@ Name: "{autodesktop}\Transom"; Filename: "{app}\bin\transom.exe"; Tasks: desktop
 
 [Run]
 Filename: "{app}\bin\transom.exe"; Description: "Launch Transom"; Flags: nowait postinstall skipifsilent
+
+[Code]
+// [InstallDelete]: an earlier Transom install in this folder.
+function IsTransomUpgrade: Boolean;
+begin
+  Result := FileExists(ExpandConstant('{app}\bin\transom.exe'));
+end;
+
+// Delete Software\Classes\rdp (HKA) only if its open command is still Transom's: another
+// client may have registered the rdp: scheme since.
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  RootKey: HKEY;
+  Command, Exe: String;
+begin
+  if CurUninstallStep <> usUninstall then
+    Exit;
+  if IsAdminInstallMode then
+    RootKey := HKLM
+  else
+    RootKey := HKCU;
+  Exe := '"' + ExpandConstant('{app}\bin\transom.exe') + '"';
+  if RegQueryStringValue(RootKey, 'Software\Classes\rdp\shell\open\command', '', Command) and
+     (Pos(Lowercase(Exe), Lowercase(Command)) = 1) then
+    RegDeleteKeyIncludingSubkeys(RootKey, 'Software\Classes\rdp');
+end;

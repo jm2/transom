@@ -7,7 +7,7 @@
 # Needs scripts/test-servers.sh up.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-STATE="${TMPDIR:-/var/tmp}/transom-test"
+source scripts/lib/state.sh
 K="$STATE/kdc"
 cargo build -q -p transom-view-freerdp --example spike
 podman build -q -t transom-test-kdc tests/servers/kdc >/dev/null

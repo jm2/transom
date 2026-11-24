@@ -35,8 +35,8 @@ sleep 4
 
 grdctl --headless rdp set-tls-cert "$tls/tls.crt"
 grdctl --headless rdp set-tls-key "$tls/tls.key"
-# Throwaway test credentials; on argv only inside this container.
-grdctl --headless rdp set-credentials "$RDP_USER" "$RDP_PASS"
+# The password goes in on stdin, not argv: grdctl reads it there when it isn't given.
+printf '%s\n' "$RDP_PASS" | grdctl --headless rdp set-credentials "$RDP_USER"
 grdctl --headless rdp disable-view-only
 # `grdctl rdp enable` also tries to enable a systemd unit; set the key directly.
 # Headless mode uses its own relocated settings path.

@@ -1,11 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Bridges the GDK clipboard and the RDP clipboard channel.
 //!
-//! Local → remote: when the local clipboard changes, announce what it offers;
-//! when the remote asks, read and convert it. Remote → local: when the remote
-//! clipboard changes, fetch every format we understand and publish them as one
-//! GDK content provider. The provider we published is remembered so our own
-//! change notification doesn't bounce back to the remote.
+//! Local → remote: when the local clipboard changes *while the session has focus*,
+//! announce what it offers (a change made elsewhere is announced when the session
+//! gets focus back); when the remote asks, read and convert it, but only content
+//! that was announced, and never what a password manager marked as concealed.
+//! Remote → local: when the remote clipboard changes, fetch every format we
+//! understand and publish them as one GDK content provider, again only while the
+//! session has focus, so a background session can't replace the local clipboard.
+//! Images are passed on as PNG bytes without being decoded here. The provider we
+//! published is remembered so our own change notification doesn't bounce back.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
@@ -22,12 +26,24 @@ use crate::TransomView;
 
 /// Upper bound for any clipboard payload we read or accept (bytes).
 const MAX_CLIP_BYTES: usize = 64 * 1024 * 1024;
+/// Most bytes of a local file served per remote request (the remote asks again).
+const MAX_FILE_CHUNK: u32 = 8 * 1024 * 1024;
+/// How long to wait for the remote to answer one file request.
+const FILE_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+/// Clipboard types password managers set on secrets (KDE/KeePassXC, macOS).
+const CONCEALED_TYPES: &[&str] = &[
+    "x-kde-passwordManagerHint",
+    "org.nspasteboard.ConcealedType",
+    "application/x-nspasteboard-concealed-type",
+];
 
 #[derive(Default)]
 struct State {
     mode: Option<ClipboardMode>,
     clipboard: Option<gdk::Clipboard>,
     handler: Option<glib::SignalHandlerId>,
+    /// The view and its `notify::has-focus` handler.
+    focus_handler: Option<(glib::WeakRef<TransomView>, glib::SignalHandlerId)>,
     /// Remote formats still to fetch, and what we've fetched so far.
     fetch: VecDeque<ClipFormat>,
     fetched: Vec<(ClipFormat, Vec<u8>)>,
@@ -40,6 +56,13 @@ struct State {
     next_stream: u32,
     /// Where remote files are staged for this session (removed on stop).
     staging: Option<PathBuf>,
+    /// Whether the session view has keyboard focus.
+    focused: bool,
+    /// Local clipboard generation, and the generation last announced to the remote.
+    local_gen: u64,
+    announced_gen: u64,
+    /// A remote clipboard change that arrived while unfocused, applied on focus.
+    pending_remote: Option<Vec<ClipFormat>>,
 }
 
 /// Per-view clipboard bridge.
@@ -52,7 +75,15 @@ impl std::fmt::Debug for ClipboardBridge {
     }
 }
 
+fn concealed(cb: &gdk::Clipboard) -> bool {
+    let f = cb.formats();
+    CONCEALED_TYPES.iter().any(|t| f.contain_mime_type(t))
+}
+
 fn local_formats(cb: &gdk::Clipboard) -> Vec<ClipFormat> {
+    if concealed(cb) {
+        return Vec::new();
+    }
     let f = cb.formats();
     let mut out = Vec::new();
     if f.contain_mime_type("text/plain;charset=utf-8")
@@ -82,6 +113,12 @@ impl ClipboardBridge {
         let mut s = self.0.borrow_mut();
         s.mode = Some(mode);
         s.clipboard = Some(cb.clone());
+        // "Focus" = the view is the focus widget of the active window (has-focus), so
+        // switching to another window counts as leaving the session.
+        s.focused = view.has_focus();
+        let bridge = self.clone();
+        let id = view.connect_has_focus_notify(move |v| bridge.focus_changed(v, v.has_focus()));
+        s.focus_handler = Some((view.downgrade(), id));
         if mode.to_remote() {
             let weak = view.downgrade();
             let bridge = self.clone();
@@ -100,11 +137,17 @@ impl ClipboardBridge {
         if let (Some(cb), Some(id)) = (s.clipboard.take(), s.handler.take()) {
             cb.disconnect(id);
         }
+        if let Some((view, id)) = s.focus_handler.take()
+            && let Some(view) = view.upgrade()
+        {
+            glib::prelude::ObjectExt::disconnect(&view, id);
+        }
         s.mode = None;
         s.fetch.clear();
         s.fetched.clear();
         s.local_files.clear();
         s.file_waiters.clear(); // wakes pending downloads with an error
+        s.pending_remote = None;
         if let Some(dir) = s.staging.take() {
             let _ = std::fs::remove_dir_all(dir);
         }
@@ -116,9 +159,58 @@ impl ClipboardBridge {
         if ours.is_some() && cb.content() == ours {
             return;
         }
+        let focused = {
+            let mut s = self.0.borrow_mut();
+            s.local_gen += 1;
+            s.focused
+        };
+        // Copies made in other apps while this session is in the background aren't
+        // offered to the remote until the user comes back to it.
+        if focused {
+            self.announce(view, cb);
+        } else {
+            tracing::debug!("local clipboard changed; announced when the session gets focus");
+        }
+    }
+
+    fn announce(&self, view: &TransomView, cb: &gdk::Clipboard) {
         let formats = local_formats(cb);
-        tracing::debug!(?formats, "local clipboard changed");
+        {
+            let mut s = self.0.borrow_mut();
+            s.announced_gen = s.local_gen;
+        }
+        tracing::debug!(?formats, "announcing local clipboard");
         view.send_command(EngineCommand::ClipboardLocalFormats(formats));
+    }
+
+    /// The session view gained or lost keyboard focus.
+    fn focus_changed(&self, view: &TransomView, focused: bool) {
+        tracing::debug!(focused, "session focus");
+        let (announce, pending) = {
+            let mut s = self.0.borrow_mut();
+            s.focused = focused;
+            if !focused || s.mode.is_none() {
+                return;
+            }
+            let announce = s.mode.is_some_and(|m| m.to_remote()) && s.local_gen != s.announced_gen;
+            (
+                announce.then(|| s.clipboard.clone()).flatten(),
+                s.pending_remote.take(),
+            )
+        };
+        if let Some(cb) = announce {
+            self.announce(view, &cb);
+        }
+        if let Some(formats) = pending {
+            self.remote_formats(view, formats);
+        }
+    }
+
+    /// Whether the local clipboard still holds what we last announced (and isn't a
+    /// password manager's secret): only then may the remote read it.
+    fn may_serve(&self, cb: &gdk::Clipboard) -> bool {
+        let s = self.0.borrow();
+        s.local_gen == s.announced_gen && !concealed(cb)
     }
 
     /// The remote asks for our clipboard in `format`.
@@ -131,7 +223,7 @@ impl ClipboardBridge {
             view.send_command(EngineCommand::ClipboardReply { format, data: None });
             return;
         };
-        if !mode.to_remote() {
+        if !mode.to_remote() || !self.may_serve(&cb) {
             view.send_command(EngineCommand::ClipboardReply { format, data: None });
             return;
         }
@@ -163,6 +255,11 @@ impl ClipboardBridge {
     pub fn remote_formats(&self, view: &TransomView, formats: Vec<ClipFormat>) {
         let mut s = self.0.borrow_mut();
         if !s.mode.is_some_and(|m| m.from_remote()) || formats.is_empty() {
+            return;
+        }
+        if !s.focused {
+            // Applied when the session gets focus back (latest change wins).
+            s.pending_remote = Some(formats);
             return;
         }
         // Files, text, HTML, and the best image format.
@@ -226,12 +323,20 @@ impl ClipboardBridge {
 impl ClipboardBridge {
     /// The remote asks for (part of) one of the local files we offered.
     pub fn file_requested(&self, view: &TransomView, stream_id: u32, index: u32, range: FileRange) {
-        let entry = self.0.borrow().local_files.get(index as usize).cloned();
+        // Only files from the clipboard content that was announced.
+        let current = {
+            let s = self.0.borrow();
+            s.local_gen == s.announced_gen
+        };
+        let entry = current
+            .then(|| self.0.borrow().local_files.get(index as usize).cloned())
+            .flatten();
         let view = view.clone();
         glib::spawn_future_local(async move {
             let data = match (entry, range) {
                 (Some((_, d)), FileRange::Size) => Some(d.size.to_le_bytes().to_vec()),
                 (Some((path, d)), FileRange::Bytes { offset, len }) if !d.is_dir => {
+                    let len = len.min(MAX_FILE_CHUNK);
                     gio::spawn_blocking(move || read_range(&path, offset, len))
                         .await
                         .ok()
@@ -269,11 +374,21 @@ impl ClipboardBridge {
             index,
             range,
         });
-        rx.recv().await.ok().flatten()
+        // A remote that never answers (or a session that ended) mustn't hang the
+        // application that's pasting.
+        let reply = glib::future_with_timeout(FILE_REQUEST_TIMEOUT, rx.recv()).await;
+        self.0.borrow_mut().file_waiters.remove(&stream_id);
+        match reply {
+            Ok(r) => r.ok().flatten(),
+            Err(_) => {
+                tracing::warn!(stream_id, "remote didn't answer a file request");
+                None
+            }
+        }
     }
 
     fn files_provider(&self, view: &TransomView, data: &[u8]) -> Option<gdk::ContentProvider> {
-        let files = clipboard::decode_file_group(data)?;
+        let files = clipboard::decode_file_group_indexed(data)?;
         if files.is_empty() {
             return None;
         }
@@ -292,55 +407,51 @@ impl ClipboardBridge {
 
     /// Download the remote files into this session's staging directory and return
     /// the top-level paths.
-    async fn download(&self, view: &TransomView, files: &[FileDescriptor]) -> Option<Vec<PathBuf>> {
+    async fn download(
+        &self,
+        view: &TransomView,
+        files: &[(u32, FileDescriptor)],
+    ) -> Option<Vec<PathBuf>> {
         const CHUNK: u32 = 4 * 1024 * 1024;
         let root = {
             let mut s = self.0.borrow_mut();
-            let base = s
-                .staging
-                .get_or_insert_with(|| {
-                    glib::user_cache_dir()
-                        .join("transom")
-                        .join("clipboard")
-                        .join(format!(
-                            "{}-{:x}",
-                            std::process::id(),
-                            glib::monotonic_time()
-                        ))
-                })
-                .clone();
+            let base = s.staging.get_or_insert_with(new_staging_dir).clone();
             base.join(format!("{}", s.next_stream))
         };
-        std::fs::create_dir_all(&root).ok()?;
+        create_private_dir(&root).ok()?;
         let mut top = Vec::new();
-        for (i, d) in files.iter().enumerate() {
+        for &(i, ref d) in files {
             let path = root.join(&d.path);
             let first = root.join(d.path.split('/').next().unwrap_or(&d.path));
             if !top.contains(&first) {
                 top.push(first);
             }
             if d.is_dir {
-                std::fs::create_dir_all(&path).ok()?;
+                create_private_dir(&path).ok()?;
                 continue;
             }
             if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent).ok()?;
+                create_private_dir(parent).ok()?;
             }
             let size = if d.size > 0 {
                 d.size
             } else {
-                let b = self.request_file(view, i as u32, FileRange::Size).await?;
+                let b = self.request_file(view, i, FileRange::Size).await?;
                 u64::from_le_bytes(b.get(..8)?.try_into().ok()?)
             };
             let mut out = std::fs::File::create(&path).ok()?;
             let mut offset = 0u64;
             while offset < size {
-                let len = CHUNK.min((size - offset) as u32);
+                // In u64 first: (size - offset) as u32 wraps for files over 4 GiB.
+                let len = u64::from(CHUNK).min(size - offset) as u32;
                 let chunk = self
-                    .request_file(view, i as u32, FileRange::Bytes { offset, len })
+                    .request_file(view, i, FileRange::Bytes { offset, len })
                     .await?;
-                if chunk.is_empty() {
-                    break;
+                // Short, empty or oversized answers are errors, not the end of the file:
+                // a truncated file must not look like a successful paste.
+                if chunk.is_empty() || chunk.len() > len as usize {
+                    tracing::warn!(path = %d.path, offset, "remote file transfer failed");
+                    return None;
                 }
                 std::io::Write::write_all(&mut out, &chunk).ok()?;
                 offset += chunk.len() as u64;
@@ -351,11 +462,45 @@ impl ClipboardBridge {
     }
 }
 
+/// A new staging directory for this session's remote files, 0700. Leftovers of
+/// sessions that ended without cleaning up (a crash) are removed after a day.
+fn new_staging_dir() -> PathBuf {
+    let base = glib::user_cache_dir().join("transom").join("clipboard");
+    if let Ok(entries) = std::fs::read_dir(&base) {
+        let day = std::time::Duration::from_secs(24 * 3600);
+        for e in entries.flatten() {
+            let old = e
+                .metadata()
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.elapsed().ok())
+                .is_some_and(|age| age > day);
+            if old {
+                let _ = std::fs::remove_dir_all(e.path());
+            }
+        }
+    }
+    base.join(format!(
+        "{}-{:x}",
+        std::process::id(),
+        glib::monotonic_time()
+    ))
+}
+
+/// `create_dir_all`, with the new directories readable by this user only.
+fn create_private_dir(path: &Path) -> std::io::Result<()> {
+    let mut b = std::fs::DirBuilder::new();
+    b.recursive(true);
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut b, 0o700);
+    b.create(path)
+}
+
 fn read_range(path: &Path, offset: u64, len: u32) -> Option<Vec<u8>> {
     use std::io::{Read, Seek, SeekFrom};
     let mut f = std::fs::File::open(path).ok()?;
     f.seek(SeekFrom::Start(offset)).ok()?;
-    let mut buf = Vec::with_capacity(len as usize);
+    let mut buf = Vec::with_capacity(len.min(MAX_FILE_CHUNK) as usize);
     f.take(len as u64).read_to_end(&mut buf).ok()?;
     Some(buf)
 }
@@ -521,10 +666,12 @@ fn provider_for(format: ClipFormat, data: Vec<u8>) -> Option<gdk::ContentProvide
             "text/html",
             &glib::Bytes::from_owned(clipboard::decode_html(&data).into_bytes()),
         ),
-        ClipFormat::Png => {
-            let tex = gdk::Texture::from_bytes(&glib::Bytes::from_owned(data)).ok()?;
-            gdk::ContentProvider::for_value(&tex.to_value())
+        // Passed on undecoded: GDK documents its image loaders as unsuitable for
+        // untrusted data, and the application that pastes decodes it anyway.
+        ClipFormat::Png if clipboard::png_acceptable(&data) => {
+            gdk::ContentProvider::for_bytes("image/png", &glib::Bytes::from_owned(data))
         }
+        ClipFormat::Png => return None,
         ClipFormat::Files => return None, // handled by files_provider
         ClipFormat::Dib => {
             let img = clipboard::dib_to_image(&data)?;
