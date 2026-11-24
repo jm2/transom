@@ -91,6 +91,28 @@ impl Default for Profile {
 }
 
 /// `.rdp` keys mapped onto profile fields (everything else goes to `rdp_extra`).
+/// Settings that grant the remote computer local resources or change what runs there.
+/// Transom doesn't act on them from a file, and doesn't carry them into an exported
+/// file either (where mstsc would act on them without the user ever having seen them).
+const UNSAFE_PASSTHROUGH_KEYS: &[&str] = &[
+    "drivestoredirect",
+    "redirectdrives",
+    "devicestoredirect",
+    "usbdevicestoredirect",
+    "camerastoredirect",
+    "redirectprinters",
+    "redirectsmartcards",
+    "redirectcomports",
+    "redirectposdevices",
+    "redirectwebauthn",
+    "redirectlocation",
+    "alternate shell",
+    "shell working directory",
+    "authentication level",
+    "enablecredsspsupport",
+    "password 51",
+];
+
 const MODELLED_KEYS: &[&str] = &[
     "full address",
     "server port",
@@ -198,22 +220,26 @@ impl Profile {
         p.microphone = f.get_bool("audiocapturemode").unwrap_or(false);
         p.multimon = f.get_bool("use multimon").unwrap_or(false);
         p.fit = FitMode::Fit;
-        if f.get_bool("enablecredsspsupport") == Some(false) {
-            p.security = SecurityMode::Tls;
-        }
+        // `enablecredsspsupport:i:0` (TLS without NLA) isn't imported: Automatic still
+        // reaches servers without NLA, and a file shouldn't be able to switch NLA off.
+        //
+        // Gateway usage: 1 = always, 2 = when a direct connection fails; 0 and 4 mean
+        // don't use it, 3 means the system default (none here).
         if let Some(gw) = f.get_str("gatewayhostname")
-            && f.get_int("gatewayusagemethod").unwrap_or(1) != 0
+            && matches!(f.get_int("gatewayusagemethod").unwrap_or(1), 1 | 2)
         {
             let (gh, gp) = crate::rdpfile::split_host_port(gw).unwrap_or((gw.to_string(), None));
             p.gateway = Some(Gateway {
                 host: gh,
                 port: gp,
                 username: None,
-                same_credentials: f.get_bool("promptcredentialonce").unwrap_or(true),
+                // Sending the session password to the gateway is opt-in: a file names
+                // the gateway, so it could name an attacker's.
+                same_credentials: f.get_int("promptcredentialonce") == Some(1),
             });
         }
         for (k, v) in f.iter() {
-            if !MODELLED_KEYS.contains(&k) {
+            if !MODELLED_KEYS.contains(&k) && !UNSAFE_PASSTHROUGH_KEYS.contains(&k) {
                 let ty = match v {
                     RdpValue::Str(_) => 's',
                     RdpValue::Int(_) => 'i',
@@ -311,8 +337,9 @@ impl Profile {
         }
     }
 
-    pub fn to_toml(&self) -> String {
-        toml::to_string_pretty(self).unwrap_or_default()
+    /// Fails for values TOML can't hold (a folder path that isn't valid UTF-8).
+    pub fn to_toml(&self) -> Result<String, toml::ser::Error> {
+        toml::to_string_pretty(self)
     }
 
     pub fn from_toml(s: &str) -> Result<Self, toml::de::Error> {
@@ -332,6 +359,11 @@ pub enum ProfileError {
     },
     #[error("invalid profile id {0:?}")]
     BadId(String),
+    #[error("can't save {id}: {source}")]
+    Serialize {
+        id: String,
+        source: toml::ser::Error,
+    },
 }
 
 /// A directory of `<id>.toml` profile files.
@@ -399,7 +431,14 @@ impl ProfileStore {
 
     pub fn save(&self, profile: &Profile) -> Result<(), ProfileError> {
         let path = self.path_for(&profile.id)?;
-        crate::fsutil::write_atomic(&path, profile.to_toml().as_bytes())
+        // Serialise first: a failure must not replace the file with an empty one.
+        let text = profile
+            .to_toml()
+            .map_err(|source| ProfileError::Serialize {
+                id: profile.id.clone(),
+                source,
+            })?;
+        crate::fsutil::write_atomic(&path, text.as_bytes())
             .map_err(|source| ProfileError::Io { path, source })
     }
 
@@ -429,7 +468,7 @@ mod tests {
             ..Default::default()
         });
         p.rdp_extra.insert("keyboardhook".into(), "i:2".into());
-        let text = p.to_toml();
+        let text = p.to_toml().unwrap();
         assert!(text.contains("clipboard = \"to-remote\""), "{text}");
         assert_eq!(Profile::from_toml(&text).unwrap(), p);
     }
@@ -548,5 +587,78 @@ mod tests {
         // An empty host means no gateway.
         p.gateway.as_mut().unwrap().host.clear();
         assert!(p.session_config(None).gateway.is_none());
+    }
+
+    #[test]
+    fn imported_files_cant_weaken_security_or_reach_local_resources() {
+        let f = RdpFile::parse_str(
+            "full address:s:pc.example\n\
+             gatewayhostname:s:gw.attacker.example\n\
+             enablecredsspsupport:i:0\n\
+             drivestoredirect:s:*\n\
+             alternate shell:s:cmd.exe\n\
+             keyboardhook:i:2\n",
+        );
+        let p = Profile::from_rdp(&f).unwrap();
+        // The gateway is shown, but doesn't get the session password unless asked.
+        let gw = p.gateway.as_ref().unwrap();
+        assert_eq!(gw.host, "gw.attacker.example");
+        assert!(!gw.same_credentials);
+        assert_eq!(p.security, SecurityMode::Negotiate);
+        assert!(!p.rdp_extra.contains_key("drivestoredirect"));
+        assert!(!p.rdp_extra.contains_key("alternate shell"));
+        assert!(p.rdp_extra.contains_key("keyboardhook"));
+        let out = p.to_rdp().to_text();
+        assert!(
+            !out.contains("drivestoredirect") && !out.contains("alternate shell"),
+            "{out}"
+        );
+        // Only an explicit 1 shares the session password with the gateway.
+        for (v, shared) in [
+            ("", false),
+            ("0", false),
+            ("1", true),
+            ("2", false),
+            ("-1", false),
+        ] {
+            let line = if v.is_empty() {
+                String::new()
+            } else {
+                format!("promptcredentialonce:i:{v}\n")
+            };
+            let f = RdpFile::parse_str(&format!("full address:s:pc\ngatewayhostname:s:gw\n{line}"));
+            let gw = Profile::from_rdp(&f).unwrap().gateway.unwrap();
+            assert_eq!(gw.same_credentials, shared, "promptcredentialonce {v:?}");
+        }
+        // "Don't use a gateway" (4) means no gateway.
+        let f =
+            RdpFile::parse_str("full address:s:pc\ngatewayhostname:s:gw\ngatewayusagemethod:i:4\n");
+        assert!(Profile::from_rdp(&f).unwrap().gateway.is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_profile_toml_cant_hold_is_refused_not_emptied() {
+        use std::os::unix::ffi::OsStrExt;
+        let dir = std::env::temp_dir().join(format!("transom-profile-{}", std::process::id()));
+        let store = ProfileStore::new(dir.clone());
+        let mut p = Profile {
+            id: "p".into(),
+            host: "h".into(),
+            ..Default::default()
+        };
+        store.save(&p).unwrap();
+        p.redirections.drives.push(crate::devices::DriveShare {
+            name: "x".into(),
+            path: std::ffi::OsStr::from_bytes(b"/home/u/caf\xe9").into(),
+        });
+        assert!(matches!(
+            store.save(&p),
+            Err(ProfileError::Serialize { .. })
+        ));
+        // The earlier file is still there, intact.
+        let text = std::fs::read_to_string(dir.join("p.toml")).unwrap();
+        assert!(text.contains("host = \"h\""), "{text}");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

@@ -24,12 +24,15 @@ call("NotifyPointerMotionRelative", "(dd)", -5000.0, -5000.0)
 call("NotifyPointerMotionRelative", "(dd)", 500.0, 650.0)  # file list of the maximized window
 call("NotifyPointerButton", "(ib)", 0x110, True)
 call("NotifyPointerButton", "(ib)", 0x110, False)
-time.sleep(0.5)
+# The click gives the session focus, which is when the client announces its files to
+# Windows (the clipboard is only shared while the session has focus): let that land.
+time.sleep(3)
 call("NotifyKeyboardKeycode", "(ub)", 42, True)   # warm-up (mutter drops the first key)
 call("NotifyKeyboardKeycode", "(ub)", 42, False)
 call("NotifyKeyboardKeycode", "(ub)", 29, True)   # Ctrl
 call("NotifyKeyboardKeycode", "(ub)", 47, True)   # V
 call("NotifyKeyboardKeycode", "(ub)", 47, False)
 call("NotifyKeyboardKeycode", "(ub)", 29, False)
-s.call_sync("Stop", None, 0, -1)
-print("injected")
+print("injected", flush=True)
+# Keep the session (and with it the window's keyboard focus) for the copy that follows.
+time.sleep(600)
