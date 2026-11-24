@@ -41,6 +41,8 @@ pub struct Session {
     stage: RefCell<Option<gtk::Label>>,
     /// Shows the session if the first picture doesn't arrive (FIRST_FRAME_TIMEOUT).
     reveal_timer: RefCell<Option<glib::SourceId>>,
+    /// The devices this session can't share were reported (once, not per reconnect).
+    device_problems_shown: Cell<bool>,
 }
 
 impl std::fmt::Debug for Session {
@@ -82,6 +84,7 @@ impl Session {
             followers: RefCell::new(Vec::new()),
             stage: RefCell::new(None),
             reveal_timer: RefCell::new(None),
+            device_problems_shown: Cell::new(false),
         });
         session.wire();
         session
@@ -234,20 +237,9 @@ impl Session {
 
         let weak = Rc::downgrade(self);
         let notice_weak = weak.clone();
-        self.view.connect_notice(move |view, text| {
-            let Some(s) = notice_weak.upgrade() else {
-                return;
-            };
-            // The window's toast overlay wraps every session, so name this one: the
-            // notice may arrive while another tab is selected.
-            if let Some(toasts) = view
-                .ancestor(adw::ToastOverlay::static_type())
-                .and_downcast::<adw::ToastOverlay>()
-            {
-                let text = format!("{}: {text}", s.profile.borrow().display_name());
-                let toast = adw::Toast::new(&glib::markup_escape_text(&text));
-                toast.set_timeout(0); // stays until dismissed
-                toasts.add_toast(toast);
+        self.view.connect_notice(move |_, text| {
+            if let Some(s) = notice_weak.upgrade() {
+                s.notice(text, None);
             }
         });
         self.view.connect_disconnected(move |_, reason| {
@@ -287,8 +279,51 @@ impl Session {
     }
 
     /// Start (or restart) the connection. `password` overrides any saved one.
+    /// Something the user should know about this session, as a toast that stays until
+    /// dismissed. The window's toast overlay wraps every session, so it names this
+    /// one: it may show while another tab is selected. `copy`: a command the toast
+    /// offers to copy (a fix the user runs).
+    fn notice(&self, text: &str, copy: Option<String>) {
+        let Some(toasts) = self
+            .view
+            .ancestor(adw::ToastOverlay::static_type())
+            .and_downcast::<adw::ToastOverlay>()
+        else {
+            return;
+        };
+        let text = format!("{}: {text}", self.profile.borrow().display_name());
+        let toast = adw::Toast::new(&glib::markup_escape_text(&text));
+        toast.set_timeout(0);
+        if let Some(command) = copy {
+            toast.set_button_label(Some("_Copy Command"));
+            let (view, overlay) = (self.view.clone(), toasts.clone());
+            toast.connect_button_clicked(move |_| {
+                view.clipboard().set_text(&command);
+                overlay.add_toast(adw::Toast::new(
+                    "Command copied: run it in a terminal, then restart Transom",
+                ));
+            });
+        }
+        toasts.add_toast(toast);
+    }
+
+    /// Devices the profile shares that this session can't (a missing folder, or a
+    /// permission the Flatpak wasn't granted): the engine leaves them out; say so,
+    /// once per session.
+    fn report_device_problems(&self) {
+        if self.device_problems_shown.replace(true) {
+            return;
+        }
+        let (_, problems) =
+            transom_view::core::devices::usable(&self.profile.borrow().redirections);
+        for p in problems {
+            self.notice(&format!("Not shared: {p}"), p.fix_command());
+        }
+    }
+
     pub fn start(self: &Rc<Self>, password: Option<SecretString>) {
         self.show_connecting();
+        self.report_device_problems();
         let s = self.clone();
         glib::spawn_future_local(async move {
             let profile = s.profile.borrow().clone();
