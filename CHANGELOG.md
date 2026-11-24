@@ -49,6 +49,16 @@ The first release.
   tells you which session that was.
 - Passwords are saved only when you ask (Remember Password is off by default).
 - The Windows installer registers `.rdp` files and `rdp://` links only if you choose to.
+- The Flatpak can't reach the host's smart-card (pcscd) or printer (CUPS) services until
+  you grant them; a connection that shares those devices names the `flatpak override`
+  command. Devices a connection can't share (a missing folder, a missing permission) are
+  reported when it connects.
+- The AppImage, macOS and Windows packages bundle FreeRDP, FFmpeg and OpenSSL; they are
+  rebuilt and released when those publish security fixes ([SECURITY.md](https://github.com/jm2/transom/blob/main/SECURITY.md)).
+- Known limitation: the RDP engine (FreeRDP, FFmpeg) runs inside Transom's process, and
+  only the Flatpak sandbox contains it; a sandboxed helper process is planned
+  ([docs/security.md](https://github.com/jm2/transom/blob/main/docs/security.md),
+  [#18](https://github.com/jm2/transom/issues/18)).
 
 [Unreleased]: https://github.com/jm2/transom/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/jm2/transom/releases/tag/v0.1.0
