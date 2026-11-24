@@ -247,9 +247,21 @@ prep)
      new_password > "$VM/password"
      printf '%s\n%s\n' "$USER_NAME" "$(cat "$VM/password")" > "$VM/creds"
      a=$(mktemp -d -p "${TMPDIR:-/var/tmp}")
-     sed -e "s/@PASSWORD@/$(cat "$VM/password")/g" -e "s/@USER@/$USER_NAME/g" \
-         -e "s/@COMPUTER_NAME@/$HOST/" -e "s/@IMAGE_INDEX@/$INDEX/" -e "s/@ROLE@/$ROLE/" \
-         "$SRC/autounattend.xml.in" > "$a/autounattend.xml"
+     # Python reads the password from its file (sed would need it on its command line).
+     python3 -I - "$SRC/autounattend.xml.in" "$VM/password" "$USER_NAME" "$HOST" "$INDEX" "$ROLE" \
+         > "$a/autounattend.xml" <<'PY'
+import sys
+from xml.sax.saxutils import escape
+template, password_file, user, host, index, role = sys.argv[1:]
+with open(password_file) as f:
+    password = f.read().rstrip("\n")
+with open(template) as f:
+    xml = f.read()
+for key, value in (("PASSWORD", password), ("USER", user), ("COMPUTER_NAME", host),
+                   ("IMAGE_INDEX", index), ("ROLE", role)):
+    xml = xml.replace(f"@{key}@", escape(value))
+sys.stdout.write(xml)
+PY
      cp "$SRC/transom-setup.ps1" "$SRC/transom-policy.ps1" "$a/"
      xorriso -as mkisofs -quiet -J -r -V TRANSOM_ANSWER -o "$VM/answer.iso" "$a"
      rm -rf "$a")
