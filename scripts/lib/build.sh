@@ -75,7 +75,12 @@ check_component() {
 check_llvm_cov() {
     local sysroot host
     check_tool_version cargo-llvm-cov 0.8.7 "cargo install --locked cargo-llvm-cov --version 0.8.7"
-    [[ -n ${LLVM_COV:-} && -n ${LLVM_PROFDATA:-} ]] && return 0
+    if [[ -n ${LLVM_COV:-} && -n ${LLVM_PROFDATA:-} ]]; then
+        # cargo-llvm-cov uses them unchecked, and would fail only after the tests.
+        command -v "$LLVM_COV" >/dev/null || problem "LLVM_COV=$LLVM_COV: not an executable"
+        command -v "$LLVM_PROFDATA" >/dev/null || problem "LLVM_PROFDATA=$LLVM_PROFDATA: not an executable"
+        return 0
+    fi
     command -v rustc >/dev/null || return 0   # check_rust reports it
     sysroot=$(rustc --print sysroot)
     host=$(rustc -vV | sed -n 's/^host: //p')

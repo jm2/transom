@@ -263,6 +263,7 @@ if (( ARCH_PKG )); then
     for f in "$work"/out/*.pkg.tar*; do [[ -f $f && $f != *.sig ]] && pkgs+=("$f"); done
     (( ${#pkgs[@]} == 1 )) || fail "makepkg didn't write exactly one package"
     out=dist/transom-$(uname -m).pkg.tar${pkgs[0]##*.pkg.tar}
+    rm -f "$out.sig"   # an earlier signed build's, which wouldn't match this package
     mv "${pkgs[0]}" "$out"
     [[ ! -f ${pkgs[0]}.sig ]] || mv "${pkgs[0]}.sig" "$out.sig"
     info "wrote $out"

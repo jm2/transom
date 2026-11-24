@@ -94,15 +94,15 @@ export PKG_CONFIG="$BREW/bin/pkg-config"
 export PKG_CONFIG_PATH="$BREW/lib/pkgconfig"
 export LIBCLANG_PATH="$BREW/opt/llvm/lib"   # bindgen
 (( BUILD )) && check_rust "$TARGET"
-if [[ -x $PKG_CONFIG ]]; then
-    check_modules "$PKG_CONFIG" "gtk4 4.16" "libadwaita-1 1.6" "freerdp3 3.15" \
-        "freerdp-client3 3.15" "winpr3 3.15"
-elif (( BUILD )); then
-    problem "pkg-config: brew install pkg-config"
-fi
 # Compiling only: --no-build bundles a binary without them.
-if (( BUILD )) && [[ ! -e $LIBCLANG_PATH/libclang.dylib ]]; then
-    problem "libclang, for bindgen: brew install llvm"
+if (( BUILD )); then
+    if [[ -x $PKG_CONFIG ]]; then
+        check_modules "$PKG_CONFIG" "gtk4 4.16" "libadwaita-1 1.6" "freerdp3 3.15" \
+            "freerdp-client3 3.15" "winpr3 3.15"
+    else
+        problem "pkg-config: brew install pkg-config"
+    fi
+    [[ -e $LIBCLANG_PATH/libclang.dylib ]] || problem "libclang, for bindgen: brew install llvm"
 fi
 if (( BUNDLE )); then
     for t in otool install_name_tool codesign iconutil; do
