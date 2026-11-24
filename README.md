@@ -99,14 +99,14 @@ gh attestation verify transom-amd64.deb --repo jm2/transom \
 | Platform | Package | Install |
 |---|---|---|
 | Linux (x86_64, aarch64) | `transom-linux-*.flatpak` | `flatpak install --user transom-linux-x86_64.flatpak` |
-| Debian 13+, Ubuntu 25.04+ | `transom-amd64.deb`, `transom-arm64.deb` | `sudo apt install ./transom-amd64.deb` |
+| Debian 13+, Ubuntu 25.10+ | `transom-amd64.deb`, `transom-arm64.deb` | `sudo apt install ./transom-amd64.deb` |
 | Fedora 44+ | `transom-x86_64.rpm`, `transom-aarch64.rpm` | `sudo dnf install ./transom-x86_64.rpm` |
 | Arch Linux | `transom-x86_64.pkg.tar.zst` | `sudo pacman -U transom-x86_64.pkg.tar.zst` |
-| macOS 13+ (Apple silicon) | `transom-macos-aarch64.dmg` | Drag to Applications; the app is ad-hoc signed, so open it the first time with right-click → Open |
+| macOS 13+ (Apple silicon) | `transom-macos-aarch64.dmg` | Drag to Applications. The app isn't notarised yet: when macOS blocks the first launch, choose **Open Anyway** in System Settings → Privacy & Security |
 | Windows 10/11 (x64, arm64) | `transom-windows-*-setup.exe`, `.zip` | Run the installer (it can register `.rdp` files and `rdp://` links), or unzip and run `bin\transom.exe` |
 
-Debian 12 and Ubuntu 24.04 ship a FreeRDP that is too old (Transom needs 3.15 or newer);
-use the Flatpak there. Fedora COPR, AUR, winget and Flathub packages are planned after
+Debian 12, Ubuntu 24.04 and Ubuntu 25.04 ship a FreeRDP that is too old (Transom needs 3.15 or
+newer); use the Flatpak there. Fedora COPR, AUR, winget and Flathub packages are planned after
 v0.1.0.
 
 ---
@@ -126,7 +126,7 @@ sudo dnf install gcc clang-devel pkgconf-pkg-config freerdp-devel libwinpr-devel
 cargo run --release -p transom
 ```
 
-Debian 13 / Ubuntu 25.04:
+Debian 13 / Ubuntu 25.10:
 
 ```sh
 sudo apt install build-essential pkg-config clang libclang-dev libgtk-4-dev \
@@ -165,7 +165,8 @@ scripts/build-macos.sh --dmg    # dist/Transom.app and dist/Transom.dmg
 
 ### Windows
 
-With MSYS2 and rustup installed, in an MSYS2 CLANG64 shell (x64):
+With MSYS2, rustup and PowerShell 7 installed (`pwsh` on the MSYS2 shell's `PATH`; Windows
+only includes Windows PowerShell 5.1), in an MSYS2 CLANG64 shell (x64):
 
 ```bash
 pacman -S mingw-w64-clang-x86_64-{toolchain,gtk4,libadwaita,freerdp,ffmpeg,adwaita-icon-theme,pkg-config,clang}
@@ -200,7 +201,9 @@ transom --password-file ~/.pw pc.rdp              # read the password from a fil
 RUST_LOG=transom=debug transom                    # debug logging on stderr
 ```
 
-Passwords are never accepted on the command line or in environment variables.
+With the Flatpak, run `flatpak run io.github.jm2.Transom` in place of `transom` (the same
+arguments follow it). Passwords are never accepted on the command line or in environment
+variables.
 
 ![The connection list](data/screenshots/transom-connections.png)
 

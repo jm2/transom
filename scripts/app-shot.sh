@@ -13,13 +13,13 @@ NAME=${1:?name}; SCALE=${2:?scale}; SECS=${3:?seconds}; shift 3
 source scripts/lib/state.sh
 CFG="$STATE/app-config-$NAME"
 rm -rf "$CFG"; mkdir -p "$CFG/transom/profiles"
-trust=()
+declare -A trust=()   # HOST:PORT -> SHA256; a later option for the same host wins
 fp=$(podman logs transom-grd 2>/dev/null | sed -n 's/^TLS fingerprint: //p' | tail -1 || true)
 while [[ $# -gt 0 && $1 != "--" ]]; do
     case $1 in
-        --seed-trust) trust+=("localhost:13389" "$fp") ;;
+        --seed-trust) trust[localhost:13389]=$fp ;;
         --trust) # HOST:PORT SHA256 (e.g. a Windows test VM)
-            trust+=("$2" "$3"); shift 2 ;;
+            trust[$2]=$3; shift 2 ;;
         --seed-multimon)
             printf 'name = "Multi"\nhost = "localhost"\nport = 13389\nusername = "transom"\nmultimon = true\n' > "$CFG/transom/profiles/multi.toml" ;;
         --seed-profile)
@@ -31,9 +31,10 @@ while [[ $# -gt 0 && $1 != "--" ]]; do
     esac
     shift
 done
-# Every --seed-trust/--trust entry, in one [hosts] table.
+# Every --seed-trust/--trust host once (TOML forbids duplicate keys), in one [hosts] table.
 if (( ${#trust[@]} )); then
-    { echo '[hosts]'; printf '"%s" = "%s"\n' "${trust[@]}"; } > "$CFG/transom/known-hosts.toml"
+    { echo '[hosts]'; for h in "${!trust[@]}"; do printf '"%s" = "%s"\n' "$h" "${trust[$h]}"; done; } \
+        > "$CFG/transom/known-hosts.toml"
 fi
 [[ ${1:-} == "--" ]] && shift
 cargo build -q -p transom
