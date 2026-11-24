@@ -24,18 +24,24 @@ What Transom protects, from whom, and where it falls short. Report problems as
 ## Certificates and credentials
 
 - Certificates are checked against the system's certificate authorities, then trusted
-  on first use; a certificate that changes blocks the connection.
+  on first use. A certificate that changes is refused unless you explicitly accept it:
+  the warning's default and close actions cancel, and accepting is styled as the
+  dangerous choice.
 - Passwords go to the system keyring (Secret Service, Keychain or Credential Manager)
   only when you ask: Remember Password is off by default. They are never passed on a
   command line or in the environment.
-- The clipboard is shared only while the session has focus, and password managers'
-  concealed entries are never offered to the remote computer.
+- The clipboard is shared only while the session has focus. Entries a password
+  manager marks as concealed (with KDE's or macOS's clipboard markers) are neither
+  offered nor sent to the remote computer, including when one is copied while the
+  remote is reading the clipboard; entries without such a marker can't be told apart.
 
 ## Devices
 
 Folders, printers, smart cards, serial ports and USB devices are off by default, and
 each connection lists its own. In the Flatpak, smart cards, printers and USB need a
-permission you grant once (Transom names the command when a connection shares them):
+permission you grant once, then restart Transom. For smart cards and printers, Transom
+names the command when a connection shares them; USB has its own setup
+([usb.md](usb.md)):
 
 ```sh
 flatpak override --user --socket=pcsc io.github.jm2.Transom     # smart cards

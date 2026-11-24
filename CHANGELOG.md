@@ -19,8 +19,8 @@ The first release.
   servers.
 - Saved connections, quick connect and search; `.rdp` files (import, export, open) and
   `rdp://` links on Linux, macOS and Windows.
-- Certificate trust: system CAs, then trust on first use; a changed certificate blocks
-  the connection.
+- Certificate trust: system CAs, then trust on first use; a changed certificate is
+  refused unless you explicitly accept it after a warning.
 - Passwords in the system keyring (Secret Service, Keychain, Credential Manager).
 - Tabs (detachable), fullscreen with keyboard shortcuts sent to the remote, multiple
   monitors.
@@ -42,8 +42,8 @@ The first release.
   clipboard nor the microphone unless you turn them on. An imported file can't turn
   off network-level authentication, and an RD Gateway gets your password only when
   the file asks for one.
-- The clipboard is shared only while the session has focus, and password managers'
-  concealed entries are never offered to the remote computer.
+- The clipboard is shared only while the session has focus, and entries a password
+  manager marks as concealed are neither offered nor sent to the remote computer.
 - Limits on the decoding work, file transfers and images a server can ask for.
 - When Remote Credential Guard can't be used and Transom connects without it, it
   tells you which session that was.

@@ -32,7 +32,7 @@ GTK app runs on macOS and Windows.
 | Servers: Windows 10/11, Windows Server, gnome-remote-desktop (including remote login) | ✅ xrdp: smoke test only |
 | Saved connections, quick connect, search | ✅ |
 | `.rdp` files (import, export, open) and `rdp://` links | ✅ Both link formats; Linux desktop file, macOS, Windows installer |
-| Certificate trust: system CAs, then trust on first use; a changed certificate blocks the connection | ✅ |
+| Certificate trust: system CAs, then trust on first use; a changed certificate is refused unless you explicitly accept it after a warning | ✅ |
 | Passwords remembered in the system keyring | ✅ Secret Service (Linux), Keychain (macOS), Credential Manager (Windows) |
 | Tabs (detachable), fullscreen, multiple monitors | ✅ |
 | Keyboard with system shortcuts sent to the remote; Ctrl+Alt+End for Ctrl+Alt+Del | ✅ |
@@ -59,7 +59,8 @@ Known limitations are listed in [docs/known-issues.md](docs/known-issues.md).
 
 - **Defaults:** `.rdp` files and `rdp://` links ask before connecting and can't grant
   devices; certificates are checked against the system CAs, then trusted on first use,
-  and a changed certificate blocks the connection; devices, the clipboard for files and
+  and a changed certificate is refused unless you explicitly accept it after a warning;
+  devices, the clipboard for files and
   links, and Remember Password are off until you turn them on.
 - **The main limitation:** FreeRDP and FFmpeg parse everything a server sends, and they
   run inside Transom's process. A bug a hostile server exploits there runs as you, except
@@ -185,8 +186,9 @@ flatpak install --user dist/transom-linux-x86_64.flatpak
 ```
 
 The Flatpak builds its own FreeRDP (with Remote Credential Guard, smart cards, printers
-and USB). The devices that reach host services need a permission, granted once; Transom
-names the command when a connection shares the device:
+and USB). Smart cards, printers and USB need a permission, granted once; restart Transom
+after granting it. For smart cards and printers, Transom names the command when a
+connection shares them; USB has its own setup ([docs/usb.md](docs/usb.md)):
 
 ```sh
 flatpak override --user --socket=pcsc io.github.jm2.Transom   # smart cards
