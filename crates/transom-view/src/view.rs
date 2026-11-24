@@ -10,8 +10,9 @@ use gtk::subclass::prelude::*;
 use gtk::{gdk, glib, graphene};
 use transom_view_core::config::SessionConfig;
 use transom_view_core::engine::{
-    AuthRequest, CertDecision, CertPrompt, Credentials, EngineCommand, EngineError, EngineEvent,
-    EngineHandle, Finished, InputEvent, MouseButton, PointerEvent, RdpEngine, Rect, SharedFrame,
+    AuthRequest, CertDecision, CertPrompt, ConnectStage, Credentials, EngineCommand, EngineError,
+    EngineEvent, EngineHandle, Finished, InputEvent, MouseButton, PointerEvent, RdpEngine, Rect,
+    SharedFrame,
 };
 use transom_view_core::geometry::{
     self, DesktopRequest, FitMode, LayoutTracker, LogicalSize, Point, ScaleMode, Size, Viewport,
@@ -84,6 +85,8 @@ mod imp {
         /// The renderer couldn't import a video frame; the engine was told to stop.
         pub video_failed: bool,
         pub resize_available: bool,
+        /// Connected, and no picture from the remote yet (`first-frame` pending).
+        pub awaiting_frame: bool,
         pub layout: LayoutTracker,
         pub layout_timer: Option<glib::SourceId>,
         pub wheel: WheelAccumulator,
@@ -132,7 +135,15 @@ mod imp {
             static SIGNALS: OnceLock<Vec<Signal>> = OnceLock::new();
             SIGNALS.get_or_init(|| {
                 vec![
+                    // (stage): how far the connection attempt has got, before
+                    // `connected`: "contacting", "authenticating", "configuring".
+                    Signal::builder("progress")
+                        .param_types([String::static_type()])
+                        .build(),
                     Signal::builder("connected").build(),
+                    // The first picture from the remote arrived (after `connected`;
+                    // until then the view is black).
+                    Signal::builder("first-frame").build(),
                     Signal::builder("disconnected")
                         .param_types([String::static_type()])
                         .build(),
@@ -586,11 +597,15 @@ mod imp {
         pub(super) fn handle_event(&self, ev: EngineEvent) {
             let obj = self.obj();
             match ev {
+                EngineEvent::Progress(stage) => {
+                    obj.emit_by_name::<()>("progress", &[&stage.nick()]);
+                }
                 EngineEvent::Connected { desktop, frame, .. } => {
                     {
                         let mut inner = self.inner.borrow_mut();
                         inner.frame = Some(frame);
                         inner.desktop = desktop;
+                        inner.awaiting_frame = true;
                         inner.tiles.clear();
                         inner.video.clear();
                         inner.video_failed = false;
@@ -600,10 +615,18 @@ mod imp {
                     obj.emit_by_name::<()>("connected", &[]);
                 }
                 EngineEvent::FrameUpdate { damage, video } => {
-                    self.inner.borrow_mut().tiles.mark(&damage);
+                    let first = {
+                        let mut inner = self.inner.borrow_mut();
+                        inner.tiles.mark(&damage);
+                        std::mem::take(&mut inner.awaiting_frame)
+                    };
                     self.update_video(video);
                     obj.queue_draw();
                     self.each_follower(|v| v.queue_draw());
+                    if first {
+                        tracing::info!("first picture from the remote");
+                        obj.emit_by_name::<()>("first-frame", &[]);
+                    }
                 }
                 EngineEvent::DesktopResized(size) => {
                     self.inner.borrow_mut().desktop = size;
@@ -705,6 +728,7 @@ mod imp {
             inner.video.clear();
             inner.video_failed = false;
             inner.resize_available = false;
+            inner.awaiting_frame = false;
             inner.layout.reset();
             inner.pressed_keys.clear();
             inner.pressed_buttons.clear();
@@ -1018,8 +1042,9 @@ mod imp {
 glib::wrapper! {
     /// A GTK4 widget showing one RDP session.
     ///
-    /// Signals: `connected`, `disconnected(reason: String)`,
-    /// `desktop-resized(width: u32, height: u32)`.
+    /// Signals: `progress(stage: String)`, `connected`, `first-frame`,
+    /// `disconnected(reason: String)`, `desktop-resized(width: u32, height: u32)`,
+    /// `certificate-prompt`, `credentials-required`, `notice(text: String)`.
     pub struct TransomView(ObjectSubclass<imp::TransomView>)
         @extends gtk::Widget,
         @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
@@ -1249,9 +1274,34 @@ impl TransomView {
         *self.imp().cert_handler.borrow_mut() = Some(Box::new(f));
     }
 
+    /// How far the connection attempt has got (before `connected`).
+    pub fn connect_progress<F: Fn(&Self, ConnectStage) + 'static>(
+        &self,
+        f: F,
+    ) -> glib::SignalHandlerId {
+        self.connect_closure(
+            "progress",
+            false,
+            glib::closure_local!(move |v: &TransomView, nick: String| {
+                if let Some(stage) = ConnectStage::from_nick(&nick) {
+                    f(v, stage);
+                }
+            }),
+        )
+    }
+
     pub fn connect_connected<F: Fn(&Self) + 'static>(&self, f: F) -> glib::SignalHandlerId {
         self.connect_closure(
             "connected",
+            false,
+            glib::closure_local!(move |v: &TransomView| f(v)),
+        )
+    }
+
+    /// The first picture from the remote arrived: the session is ready to show.
+    pub fn connect_first_frame<F: Fn(&Self) + 'static>(&self, f: F) -> glib::SignalHandlerId {
+        self.connect_closure(
+            "first-frame",
             false,
             glib::closure_local!(move |v: &TransomView| f(v)),
         )

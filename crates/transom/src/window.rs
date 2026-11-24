@@ -426,7 +426,8 @@ impl MainWindow {
         );
     }
 
-    /// Hide the header in fullscreen; reveal it when the pointer touches the top edge.
+    /// Hide the header in fullscreen; reveal it, over the session, when the pointer
+    /// touches the top edge.
     fn setup_fullscreen(self: &Rc<Self>) {
         let weak = Rc::downgrade(self);
         self.window.connect_fullscreened_notify(move |win| {
@@ -438,6 +439,16 @@ impl MainWindow {
             {
                 s.exit_multimon();
             }
+            // In fullscreen the bars slide in over the session rather than pushing it
+            // down: shrinking the session would resize the remote desktop (a round
+            // trip and a full repaint) every time they appear. Raised gives them an
+            // opaque background over the remote picture.
+            w.toolbar.set_extend_content_to_top_edge(fs);
+            w.toolbar.set_top_bar_style(if fs {
+                adw::ToolbarStyle::Raised
+            } else {
+                adw::ToolbarStyle::Flat
+            });
             w.toolbar.set_reveal_top_bars(!fs);
             w.update_inhibit();
         });

@@ -31,10 +31,11 @@ G_DECLARE_FINAL_TYPE (TransomView, transom_view, TRANSOM, VIEW, GtkWidget)
 /**
  * transom_view_new:
  *
- * Creates a view. Signals: `connected`, `disconnected` (reason),
- * `desktop-resized` (width, height), `certificate-prompt` (host, port, subject,
- * issuer, sha256, previous sha256 or ""), `credentials-required` (username,
- * domain).
+ * Creates a view. Signals: `progress` (stage: "contacting", "authenticating" or
+ * "configuring"), `connected`, `first-frame` (the first picture arrived),
+ * `disconnected` (reason), `desktop-resized` (width, height), `certificate-prompt`
+ * (host, port, subject, issuer, sha256, previous sha256 or ""),
+ * `credentials-required` (username, domain), `notice` (text).
  *
  * Returns: (transfer floating): a new #TransomView
  */

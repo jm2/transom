@@ -96,6 +96,20 @@ impl FrameData {
         self.pixels.resize(self.stride * size.height as usize, 0);
         self.generation += 1;
     }
+
+    /// Resize, keeping the pixels the old and new sizes share (the rest black): a
+    /// renderer then shows the old picture until the remote repaints at the new size.
+    pub fn resize_keeping(&mut self, size: Size) {
+        let mut next = Self::new(size);
+        next.format = self.format;
+        next.generation = self.generation + 1;
+        let row = self.size.width.min(size.width) as usize * 4;
+        for y in 0..self.size.height.min(size.height) as usize {
+            next.pixels[y * next.stride..][..row]
+                .copy_from_slice(&self.pixels[y * self.stride..][..row]);
+        }
+        *self = next;
+    }
 }
 
 /// Shared handle to the framebuffer.
@@ -198,9 +212,41 @@ pub struct CertPrompt {
     pub reply: mpsc::SyncSender<CertDecision>,
 }
 
+/// How far a connection attempt has got, for progress feedback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectStage {
+    /// Reaching the server (or its RD Gateway) and securing the connection (TLS).
+    Contacting,
+    /// Network Level Authentication, or a Microsoft Entra ID sign-in.
+    Authenticating,
+    /// The RDP connection sequence: channels, licensing, capabilities.
+    Configuring,
+}
+
+impl ConnectStage {
+    /// A stable name, for the view's `progress` signal.
+    pub fn nick(self) -> &'static str {
+        match self {
+            Self::Contacting => "contacting",
+            Self::Authenticating => "authenticating",
+            Self::Configuring => "configuring",
+        }
+    }
+
+    /// Inverse of [`nick`](Self::nick).
+    pub fn from_nick(nick: &str) -> Option<Self> {
+        [Self::Contacting, Self::Authenticating, Self::Configuring]
+            .into_iter()
+            .find(|s| s.nick() == nick)
+    }
+}
+
 /// Events from the engine to the UI. Sent from the engine thread.
 #[derive(Debug)]
 pub enum EngineEvent {
+    /// The connection attempt reached a new stage (before `Connected`; again for each
+    /// reconnection, such as a server redirection).
+    Progress(ConnectStage),
     Connected {
         desktop: Size,
         scale: ScaleFactors,
@@ -477,6 +523,35 @@ pub trait RdpEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resize_keeping_keeps_the_shared_pixels() {
+        let mut f = FrameData::new(Size::new(3, 2));
+        for (i, b) in f.pixels.iter_mut().enumerate() {
+            *b = i as u8 + 1;
+        }
+        let generation = f.generation;
+        f.resize_keeping(Size::new(2, 3));
+        assert_eq!(f.size, Size::new(2, 3));
+        assert_eq!(f.stride, 8);
+        assert_eq!(f.generation, generation + 1);
+        // Row 0 and 1: the first two pixels of the old rows; row 2: black.
+        assert_eq!(&f.pixels[0..8], &[1, 2, 3, 4, 5, 6, 7, 8]);
+        assert_eq!(&f.pixels[8..16], &[13, 14, 15, 16, 17, 18, 19, 20]);
+        assert_eq!(&f.pixels[16..24], &[0; 8]);
+    }
+
+    #[test]
+    fn connect_stage_nicks_round_trip() {
+        for s in [
+            ConnectStage::Contacting,
+            ConnectStage::Authenticating,
+            ConnectStage::Configuring,
+        ] {
+            assert_eq!(ConnectStage::from_nick(s.nick()), Some(s));
+        }
+        assert_eq!(ConnectStage::from_nick("bogus"), None);
+    }
 
     #[test]
     fn rect_intersect() {
