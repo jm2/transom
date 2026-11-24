@@ -40,7 +40,7 @@
     Check every workspace target for the Windows target and exit.
 
 .PARAMETER Clippy
-    Clippy with warnings denied: every workspace target in the debug profile, then the
+    Clippy with warnings denied on every workspace target, in the debug and then the
     release profile. Exits afterwards.
 
 .PARAMETER Test
@@ -210,8 +210,20 @@ if ($compiles) {
         cargo clippy --version *> $null
         if ($LASTEXITCODE -ne 0) { $problems.Add('cargo clippy: rustup component add clippy') }
     }
-    if ($Coverage -and -not (Get-Command cargo-llvm-cov -ErrorAction SilentlyContinue)) {
-        $problems.Add('cargo-llvm-cov: cargo install --locked cargo-llvm-cov --version 0.8.7')
+    if ($Coverage) {
+        if (-not (Get-Command cargo-llvm-cov -ErrorAction SilentlyContinue)) {
+            $problems.Add('cargo-llvm-cov: cargo install --locked cargo-llvm-cov --version 0.8.7')
+        }
+        # The LLVM tools it runs: the llvm-tools rustup component (where cargo-llvm-cov
+        # looks) unless LLVM_COV and LLVM_PROFDATA name them. CARGO_LLVM_COV_SETUP=no
+        # below keeps it from installing the component itself.
+        if (-not ($env:LLVM_COV -and $env:LLVM_PROFDATA) -and (Get-Command rustc -ErrorAction SilentlyContinue)) {
+            $sysroot = rustc --print sysroot
+            $hostTriple = ((rustc -vV) | Select-String '^host: (\S+)').Matches[0].Groups[1].Value
+            if (-not (Test-Path (Join-Path $sysroot "lib\rustlib\$hostTriple\bin\llvm-cov.exe"))) {
+                $problems.Add('LLVM''s coverage tools: rustup component add llvm-tools-preview (or set LLVM_COV and LLVM_PROFDATA)')
+            }
+        }
     }
 }
 
@@ -317,8 +329,8 @@ if ($Clippy) {
     Info "cargo clippy --workspace --all-targets --target $target (debug)"
     cargo clippy --workspace --all-targets --locked --target $target -- -D warnings
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-    Info "cargo clippy --workspace --release --target $target"
-    cargo clippy --workspace --release --locked --target $target -- -D warnings
+    Info "cargo clippy --workspace --all-targets --release --target $target"
+    cargo clippy --workspace --all-targets --release --locked --target $target -- -D warnings
     exit $LASTEXITCODE
 }
 if ($Test) {
@@ -328,6 +340,7 @@ if ($Test) {
 }
 if ($Coverage) {
     Info "cargo llvm-cov --workspace --all-targets --target $target"
+    $env:CARGO_LLVM_COV_SETUP = 'no'
     cargo llvm-cov --workspace --all-targets --locked --target $target --summary-only
     exit $LASTEXITCODE
 }

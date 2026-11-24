@@ -69,6 +69,20 @@ check_component() {
     cargo "$1" --version >/dev/null 2>&1 || problem "cargo $1: rustup component add $2"
 }
 
+# check_llvm_cov: cargo-llvm-cov and the LLVM tools it runs, from the llvm-tools rustup
+# component (where cargo-llvm-cov looks) unless LLVM_COV and LLVM_PROFDATA name them.
+# Callers run it with CARGO_LLVM_COV_SETUP=no, so it never installs the component.
+check_llvm_cov() {
+    local sysroot host
+    check_tool_version cargo-llvm-cov 0.8.7 "cargo install --locked cargo-llvm-cov --version 0.8.7"
+    [[ -n ${LLVM_COV:-} && -n ${LLVM_PROFDATA:-} ]] && return 0
+    command -v rustc >/dev/null || return 0   # check_rust reports it
+    sysroot=$(rustc --print sysroot)
+    host=$(rustc -vV | sed -n 's/^host: //p')
+    [[ -x $sysroot/lib/rustlib/$host/bin/llvm-cov ]] \
+        || problem "LLVM's coverage tools: rustup component add llvm-tools-preview (or set LLVM_COV and LLVM_PROFDATA)"
+}
+
 # check_cmd CMD WHAT: CMD on PATH, else report WHAT (what provides it).
 check_cmd() { command -v "$1" >/dev/null || problem "$1: $2"; }
 

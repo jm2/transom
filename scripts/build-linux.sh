@@ -23,8 +23,8 @@ Launch:
 Quick-exit modes (choose at most one):
   --fmt         Run cargo fmt on the workspace. Needs only Cargo.
   --check       Check every workspace target.
-  --clippy      Clippy with warnings denied: every workspace target in the debug
-                profile, then the release profile.
+  --clippy      Clippy with warnings denied on every workspace target, in the
+                debug and then the release profile.
   --coverage    Print a workspace coverage summary. Needs cargo-llvm-cov
                 (cargo install --locked cargo-llvm-cov --version 0.8.7).
 
@@ -105,6 +105,7 @@ esac
 # places clang-sys searches on Fedora, Debian/Ubuntu and Arch.
 have_libclang() {
     local f
+    [[ -f ${LIBCLANG_PATH:-} ]] && return 0   # clang-sys also takes the library file itself
     for f in ${LIBCLANG_PATH:+"$LIBCLANG_PATH"/libclang*.so*} /usr/lib64/libclang*.so* \
              /usr/lib/libclang*.so* /usr/lib/*-linux-gnu/libclang*.so* \
              /usr/lib/llvm*/lib/libclang*.so* /usr/lib64/llvm*/lib*/libclang*.so*; do
@@ -117,24 +118,24 @@ lib_problems=0
 if (( HOST )); then
     check_rust
     before=${#PROBLEMS[@]}
-    if command -v pkg-config >/dev/null; then
-        check_modules pkg-config "gtk4 4.16" "libadwaita-1 1.6" "freerdp3 3.15" \
+    # The pkg-config the build scripts use: PKG_CONFIG, else pkg-config.
+    pc=${PKG_CONFIG:-pkg-config}
+    if command -v "$pc" >/dev/null; then
+        check_modules "$pc" "gtk4 4.16" "libadwaita-1 1.6" "freerdp3 3.15" \
             "freerdp-client3 3.15" "winpr3 3.15" "libsecret-1"
         # Optional: without FFmpeg, hardware H.264 decoding is left out of the build.
         for m in libavcodec libavutil; do
-            pkg-config --atleast-version=59 "$m" 2>/dev/null \
+            "$pc" --atleast-version=59 "$m" 2>/dev/null \
                 || warn "$m >= 59 not found: building without hardware video decoding"
         done
     else
-        problem "pkg-config"
+        problem "$pc (pkg-config)"
     fi
     have_libclang || problem "libclang, for bindgen (set LIBCLANG_PATH if it is somewhere unusual)"
     lib_problems=$(( ${#PROBLEMS[@]} - before ))
 fi
 (( CLIPPY )) && check_component clippy clippy
-if (( COVERAGE )); then
-    check_tool_version cargo-llvm-cov 0.8.7 "cargo install --locked cargo-llvm-cov --version 0.8.7"
-fi
+(( COVERAGE )) && check_llvm_cov
 if (( DEB )); then
     check_tool_version cargo-deb 3.8.0 "cargo install --locked cargo-deb --version 3.8.0"
     check_cmd dpkg-shlibdeps "dpkg-dev, which gives the package its library dependencies (build the .deb on Debian 13 / Ubuntu 25.10 or later)"
@@ -149,6 +150,12 @@ fi
 if (( ARCH_PKG )); then
     check_cmd makepkg "from pacman (Arch Linux)"
     check_cmd git "scripts/dist.sh archives HEAD with it"
+    check_cmd cargo "scripts/dist.sh vendors the crates with it: https://rustup.rs"
+    # The PKGBUILD's dependencies, which makepkg would only check after the vendoring.
+    if command -v pacman >/dev/null; then
+        missing=$(bash -c '. build-aux/arch/PKGBUILD; pacman -T "${depends[@]}" "${makedepends[@]}"' 2>/dev/null || true)
+        [[ -z $missing ]] || problem "the PKGBUILD's dependencies: sudo pacman -S --needed" $missing
+    fi
     (( EUID )) || problem "a non-root user: makepkg refuses to run as root"
 fi
 if (( FLATPAK )); then
@@ -177,12 +184,12 @@ fi
 if (( CLIPPY )); then
     info "cargo clippy --workspace --all-targets (debug)"
     cargo clippy --workspace --all-targets --locked -- -D warnings
-    info "cargo clippy --workspace --release"
-    exec cargo clippy --workspace --release --locked -- -D warnings
+    info "cargo clippy --workspace --all-targets --release"
+    exec cargo clippy --workspace --all-targets --release --locked -- -D warnings
 fi
 if (( COVERAGE )); then
     info "cargo llvm-cov --workspace --all-targets"
-    exec cargo llvm-cov --workspace --all-targets --locked --summary-only
+    CARGO_LLVM_COV_SETUP=no exec cargo llvm-cov --workspace --all-targets --locked --summary-only
 fi
 
 mkdir -p dist
@@ -251,10 +258,13 @@ if (( ARCH_PKG )); then
     info "makepkg"
     # makepkg checks the dependencies itself; it never installs them here (no -s).
     (cd "$work" && PKGDEST="$work/out" SRCDEST="$work" BUILDDIR="$work/build" makepkg -f --noconfirm)
-    pkgs=("$work"/out/*.pkg.tar*)
-    (( ${#pkgs[@]} == 1 )) && [[ -f ${pkgs[0]} ]] || fail "makepkg didn't write exactly one package"
+    # The package, and its detached signature when makepkg.conf has "sign".
+    pkgs=()
+    for f in "$work"/out/*.pkg.tar*; do [[ -f $f && $f != *.sig ]] && pkgs+=("$f"); done
+    (( ${#pkgs[@]} == 1 )) || fail "makepkg didn't write exactly one package"
     out=dist/transom-$(uname -m).pkg.tar${pkgs[0]##*.pkg.tar}
     mv "${pkgs[0]}" "$out"
+    [[ ! -f ${pkgs[0]}.sig ]] || mv "${pkgs[0]}.sig" "$out.sig"
     info "wrote $out"
 fi
 

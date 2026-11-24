@@ -34,8 +34,8 @@ Launch:
 Quick-exit modes (choose at most one):
   --fmt         Run cargo fmt on the workspace. Needs only Cargo.
   --check       Check every workspace target.
-  --clippy      Clippy with warnings denied: every workspace target in the debug
-                profile, then the release profile.
+  --clippy      Clippy with warnings denied on every workspace target, in the
+                debug and then the release profile.
   --coverage    Print a workspace coverage summary. Needs cargo-llvm-cov
                 (cargo install --locked cargo-llvm-cov --version 0.8.7).
 
@@ -97,10 +97,13 @@ export LIBCLANG_PATH="$BREW/opt/llvm/lib"   # bindgen
 if [[ -x $PKG_CONFIG ]]; then
     check_modules "$PKG_CONFIG" "gtk4 4.16" "libadwaita-1 1.6" "freerdp3 3.15" \
         "freerdp-client3 3.15" "winpr3 3.15"
-else
+elif (( BUILD )); then
     problem "pkg-config: brew install pkg-config"
 fi
-[[ -e $LIBCLANG_PATH/libclang.dylib ]] || problem "libclang, for bindgen: brew install llvm"
+# Compiling only: --no-build bundles a binary without them.
+if (( BUILD )) && [[ ! -e $LIBCLANG_PATH/libclang.dylib ]]; then
+    problem "libclang, for bindgen: brew install llvm"
+fi
 if (( BUNDLE )); then
     for t in otool install_name_tool codesign iconutil; do
         check_cmd "$t" "Xcode's command line tools: xcode-select --install"
@@ -112,7 +115,7 @@ if (( BUNDLE )); then
 fi
 (( DMG )) && check_cmd create-dmg "brew install create-dmg"
 (( CLIPPY )) && check_component clippy clippy
-(( COVERAGE )) && check_tool_version cargo-llvm-cov 0.8.7 "cargo install --locked cargo-llvm-cov --version 0.8.7"
+(( COVERAGE )) && check_llvm_cov
 report_problems "Homebrew installs the libraries and tools:  brew install $FORMULAE"
 
 # ---- quick-exit modes, --run ----
@@ -123,12 +126,12 @@ fi
 if (( CLIPPY )); then
     info "cargo clippy --workspace --all-targets --target $TARGET (debug)"
     cargo clippy --workspace --all-targets --locked --target "$TARGET" -- -D warnings
-    info "cargo clippy --workspace --release --target $TARGET"
-    exec cargo clippy --workspace --release --locked --target "$TARGET" -- -D warnings
+    info "cargo clippy --workspace --all-targets --release --target $TARGET"
+    exec cargo clippy --workspace --all-targets --release --locked --target "$TARGET" -- -D warnings
 fi
 if (( COVERAGE )); then
     info "cargo llvm-cov --workspace --all-targets --target $TARGET"
-    exec cargo llvm-cov --workspace --all-targets --locked --target "$TARGET" --summary-only
+    CARGO_LLVM_COV_SETUP=no exec cargo llvm-cov --workspace --all-targets --locked --target "$TARGET" --summary-only
 fi
 
 # Scratch space; $work/binaries lists each bundled binary's Homebrew source and its
