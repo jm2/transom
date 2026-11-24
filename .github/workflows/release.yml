@@ -1,21 +1,20 @@
-# Release packaging (as Tributary/Balun): on a published GitHub release (or a manual
-# dry run), build every package from the tagged source, checksum the exact asset
-# list, attest build provenance, and attach the assets to the release.
+# Release packaging (as Balun). A maintainer runs this by hand:
+# - with an existing annotated tag vX.Y.Z: check that every version declaration agrees
+#   (scripts/release_check.py), build every package from the tagged source, checksum
+#   the exact asset list, attest build provenance, and create a DRAFT release with the
+#   assets and the tag's CHANGELOG section. Nothing is public until the draft is
+#   published by hand (which also starts Packit's COPR builds).
+# - with no tag: package the selected branch as a dry run; nothing is published.
 name: Release
 
 on:
-  release:
-    types: [published]
   workflow_dispatch:
     inputs:
       tag:
-        description: Release tag to build (vX.Y.Z); empty builds the selected branch
+        description: Existing annotated release tag (vX.Y.Z); empty = dry run of the selected branch
         required: false
         default: ""
-      dry_run:
-        description: Build only; don't publish
-        type: boolean
-        default: true
+        type: string
 
 permissions:
   contents: read
@@ -31,17 +30,15 @@ jobs:
       build_ref: ${{ steps.source.outputs.build_ref }}
       tag: ${{ steps.release.outputs.tag }}
       version: ${{ steps.source.outputs.version }}
+      release_name: ${{ steps.source.outputs.release_name }}
     steps:
       - name: Validate requested tag
         id: release
         env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-          DISPATCH_TAG: ${{ inputs.tag }}
+          TAG: ${{ inputs.tag }}
         run: |
-          TAG="${RELEASE_TAG:-$DISPATCH_TAG}"
-          # A manual run without a tag packages the selected branch (nothing is ever
-          # published from a manual run: attest and publish need a release event).
-          if [[ -z "$TAG" && "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
+          if [[ -z "$TAG" ]]; then
+            echo "dry run: packaging $GITHUB_REF_NAME, nothing will be published"
             echo "tag=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -52,6 +49,8 @@ jobs:
         with:
           ref: ${{ steps.release.outputs.tag && format('refs/tags/{0}', steps.release.outputs.tag) || github.sha }}
           persist-credentials: false
+      - name: Test the release check
+        run: python3 -I scripts/test_release_check.py
       - name: Resolve immutable source and version
         id: source
         env:
@@ -59,10 +58,51 @@ jobs:
         run: |
           VERSION="$(awk -F'"' '/^\[workspace.package\]/{p=1; next} p && /^version = /{print $2; exit}' Cargo.toml)"
           if [[ -n "$TAG" ]]; then
-            [[ "$TAG" == "v$VERSION" ]] || { echo "tag $TAG != Cargo version $VERSION" >&2; exit 1; }
+            if [[ "$(git cat-file -t "refs/tags/${TAG}")" != tag ]]; then
+              echo "release tag ${TAG} must be annotated" >&2
+              exit 1
+            fi
+            # Every version declaration must agree with the tag before anything is built.
+            python3 -I scripts/release_check.py --tag "$TAG"
+            VERSION="${TAG#v}"
+            echo "release_name=$(python3 -I scripts/release_check.py --tag "$TAG" --release-name)" >> "$GITHUB_OUTPUT"
           fi
           echo "build_ref=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+      # The draft's body is the changelog section for this exact version, so the
+      # release notes are reviewed in the tagged source, not typed later.
+      - name: Extract the release notes from the changelog
+        if: steps.release.outputs.tag != ''
+        env:
+          VERSION: ${{ steps.source.outputs.version }}
+        run: |
+          python3 -I - "$VERSION" <<'PY'
+          import re
+          import sys
+          from pathlib import Path
+
+          version = sys.argv[1]
+          text = Path("CHANGELOG.md").read_text(encoding="utf-8")
+          section = re.search(
+              rf"^## \[{re.escape(version)}\][^\n]*\n(.*?)(?=^## \[|^\[[^\]]+\]: |\Z)",
+              text,
+              re.M | re.S,
+          )
+          if section is None:
+              sys.exit(f"CHANGELOG.md has no '## [{version}]' section")
+          body = section.group(1).strip()
+          if not body:
+              sys.exit(f"CHANGELOG.md section for {version} is empty")
+          Path("release-notes").mkdir()
+          Path("release-notes/RELEASE_NOTES.md").write_text(body + "\n", encoding="utf-8")
+          PY
+      - name: Upload the release notes
+        if: steps.release.outputs.tag != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-notes
+          path: release-notes/RELEASE_NOTES.md
+          if-no-files-found: error
 
   flatpak:
     name: Flatpak (${{ matrix.arch }})
@@ -284,6 +324,8 @@ jobs:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: artifacts
+          # The packages only (not the release notes).
+          pattern: transom-*
           merge-multiple: true
       - name: Generate SHA256SUMS over the exact asset list
         run: |
@@ -310,8 +352,8 @@ jobs:
 
   attest:
     name: Attest build provenance
-    if: github.event_name == 'release'
-    needs: checksums
+    if: needs.prepare.outputs.tag != ''
+    needs: [prepare, checksums]
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -325,9 +367,12 @@ jobs:
         with:
           subject-checksums: SHA256SUMS.txt
 
+  # The only job with a repository write token. It checks out no project or build
+  # code and creates a draft release, so nothing is public until a maintainer
+  # publishes it.
   publish:
-    name: Publish release assets
-    if: github.event_name == 'release'
+    name: Create draft release
+    if: needs.prepare.outputs.tag != ''
     needs: [prepare, checksums, attest]
     runs-on: ubuntu-24.04
     permissions:
@@ -337,8 +382,41 @@ jobs:
         with:
           path: release-assets
           merge-multiple: true
+      # A rerun must never rewrite assets of a release that's already published:
+      # only a missing release or exactly one draft for this tag may proceed.
+      - name: Refuse to modify a published release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          # A failed lookup must not look like "no release exists".
+          if ! listing="$(gh api --paginate "repos/${REPOSITORY}/releases" \
+                --jq ".[] | select(.tag_name == \"${TAG}\") | .draft")"; then
+            echo "could not list the releases for ${TAG}; refusing to publish unchecked" >&2
+            exit 1
+          fi
+          mapfile -t drafts < <(grep -v '^$' <<< "${listing}" || true)
+          case "${#drafts[@]}:${drafts[0]:-}" in
+            0:) echo "no release for ${TAG} yet; a draft will be created" ;;
+            1:true) echo "one draft exists for ${TAG}; its assets will be replaced" ;;
+            1:false) echo "release ${TAG} is already published; refusing to modify it" >&2; exit 1 ;;
+            *) echo "found ${#drafts[@]} releases for ${TAG}; refusing to guess" >&2; exit 1 ;;
+          esac
       - uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
           tag_name: ${{ needs.prepare.outputs.tag }}
-          files: release-assets/*
+          name: ${{ needs.prepare.outputs.release_name }}
+          body_path: release-assets/RELEASE_NOTES.md
+          draft: true
+          prerelease: ${{ contains(needs.prepare.outputs.version, '-') }}
           fail_on_unmatched_files: true
+          files: |
+            release-assets/*.flatpak
+            release-assets/*.dmg
+            release-assets/*.zip
+            release-assets/*-setup.exe
+            release-assets/*.deb
+            release-assets/*.rpm
+            release-assets/*.pkg.tar.zst
+            release-assets/SHA256SUMS.txt

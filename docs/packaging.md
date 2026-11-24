@@ -9,10 +9,27 @@
 | macOS 13+ (Apple silicon) | .app / .dmg | `scripts/build-macos.sh --dmg` (Homebrew) | Ad-hoc signed; not notarised yet |
 | Windows 10/11 x64, arm64 | portable .zip, Inno Setup installer | `scripts/build-windows.ps1 [-InnoSetup]` (MSYS2 CLANG64/CLANGARM64) | The installer registers `.rdp` and `rdp://` (optional task) |
 
-`.github/workflows/release.yml` builds all of these from a release tag. It writes
-`SHA256SUMS.txt` over the exact asset list, attests build provenance
-(`gh attestation verify <file> --repo jm2/transom`), and attaches everything to the
-GitHub release.
+`.github/workflows/release.yml` builds all of these. Run with no tag, it packages the
+selected branch as a dry run. Run with a release tag, it builds every package from the
+tagged source, writes `SHA256SUMS.txt` over the exact asset list, attests build provenance
+(`gh attestation verify <file> --repo jm2/transom --signer-workflow
+jm2/transom/.github/workflows/release.yml`), and creates a **draft** release with the
+assets and the tag's changelog section.
+
+### Cutting a release
+
+1. Open a pull request "release: prepare vX.Y.Z" that sets the version everywhere:
+   `[workspace.package]` and the `transom-*` path dependencies in `Cargo.toml` (then
+   `cargo update -w` for `Cargo.lock`),
+   `pkgver` in both `build-aux/arch/PKGBUILD*`, `upstream_version` and `Version` in
+   `build-aux/rpm/transom.spec` (a prerelease `0.2.0-rc.1` is `Version: 0.2.0~rc.1`), a
+   `## [X.Y.Z] — date` section and its link in `CHANGELOG.md`, and a `<release>` in the
+   metainfo. `python3 scripts/release_check.py --tag vX.Y.Z` must pass. Merge it.
+2. Tag the merge commit on `main` with an annotated tag and push it:
+   `git tag -a vX.Y.Z -m "Transom vX.Y.Z" && git push origin vX.Y.Z`.
+3. Run the workflow: `gh workflow run release.yml -f tag=vX.Y.Z`.
+4. Check the draft release (assets, notes), then publish it. Publishing starts Packit's
+   COPR builds (`.packit.yaml`); release tags can't be moved or deleted afterwards.
 
 ## Feature availability by platform
 
