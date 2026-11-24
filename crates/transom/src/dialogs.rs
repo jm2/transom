@@ -302,6 +302,22 @@ fn combo<T: PartialEq + Copy>(title: &str, choices: &[(&str, T)], current: T) ->
     row
 }
 
+/// The name, host and port to save from the editor's Name, Host and Port. Either
+/// field can stand in for the other: a connection without a name is listed by its
+/// address, and with Host empty a Name that reads as an address (`host`,
+/// `host:port`, `[v6]:port`; no spaces) is the host, leaving the name empty. A port
+/// typed with the address overrides `port`. `None`: there is no host.
+fn name_and_host(name: &str, host: &str, port: u16) -> Option<(String, String, u16)> {
+    let name = name.trim();
+    let (name, address) = match host.trim() {
+        "" if name.contains(char::is_whitespace) => return None,
+        "" => ("", name),
+        h => (name, h),
+    };
+    let (host, typed) = split_host_port(address)?;
+    (!host.is_empty()).then(|| (name.to_string(), host, typed.unwrap_or(port)))
+}
+
 /// Edit (or create) a profile.
 pub fn profile_editor(
     parent: &impl IsA<gtk::Widget>,
@@ -328,9 +344,9 @@ pub fn profile_editor(
         .title("Host")
         .text(&profile.host)
         .build();
-    let port = adw::SpinRow::with_range(1.0, 65535.0, 1.0);
-    port.set_title("Port");
-    port.set_value(profile.port as f64);
+    let port_row = adw::SpinRow::with_range(1.0, 65535.0, 1.0);
+    port_row.set_title("Port");
+    port_row.set_value(profile.port as f64);
     let user = adw::EntryRow::builder()
         .title("User Name")
         .text(profile.username.clone().unwrap_or_default())
@@ -342,7 +358,7 @@ pub fn profile_editor(
     for w in [&name, &host] {
         general.add(w);
     }
-    general.add(&port);
+    general.add(&port_row);
     general.add(&user);
     general.add(&domain);
     page.add(&general);
@@ -452,10 +468,14 @@ pub fn profile_editor(
         #[weak]
         save,
         #[weak]
+        name,
+        #[weak]
         host,
-        move || save.set_sensitive(!host.text().trim().is_empty())
+        move || save.set_sensitive(name_and_host(&name.text(), &host.text(), 0).is_some())
     );
     validate();
+    let v = validate.clone();
+    name.connect_changed(move |_| v());
     host.connect_changed(move |_| validate());
 
     let done = Rc::new(done);
@@ -467,15 +487,13 @@ pub fn profile_editor(
         move |_| {
             let opt =
                 |e: &adw::EntryRow| Some(e.text().trim().to_string()).filter(|s| !s.is_empty());
+            let Some((n, h, port)) =
+                name_and_host(&name.text(), &host.text(), port_row.value() as u16)
+            else {
+                return;
+            };
             let mut p = original.clone();
-            p.name = name.text().trim().to_string();
-            p.host = host
-                .text()
-                .trim()
-                .trim_start_matches('[')
-                .trim_end_matches(']')
-                .to_string();
-            p.port = port.value() as u16;
+            (p.name, p.host, p.port) = (n, h, port);
             p.username = opt(&user);
             p.domain = opt(&domain);
             p.scale = SCALE_CHOICES[scale.selected() as usize % SCALE_CHOICES.len()].1;
@@ -549,5 +567,43 @@ fn gateway_address(g: &Gateway) -> String {
     match g.port {
         Some(p) if p != GatewayConfig::DEFAULT_PORT => format!("{host}:{p}"),
         _ => host,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::name_and_host;
+
+    fn nh(name: &str, host: &str) -> Option<(String, String, u16)> {
+        name_and_host(name, host, 3389)
+    }
+
+    #[test]
+    fn host_alone_or_with_a_name() {
+        let s = |a: &str, b: &str, p| Some((a.to_string(), b.to_string(), p));
+        assert_eq!(nh("", "pc.example"), s("", "pc.example", 3389));
+        assert_eq!(
+            nh(" Office PC ", " pc.example "),
+            s("Office PC", "pc.example", 3389)
+        );
+        assert_eq!(nh("Lab", "[fe80::1]"), s("Lab", "fe80::1", 3389));
+        assert_eq!(nh("Lab", "fe80::1"), s("Lab", "fe80::1", 3389));
+        assert_eq!(nh("Lab", "pc.example:3390"), s("Lab", "pc.example", 3390));
+    }
+
+    #[test]
+    fn a_name_stands_in_for_a_missing_host() {
+        let s = |b: &str, p| Some((String::new(), b.to_string(), p));
+        assert_eq!(nh("pc.example", ""), s("pc.example", 3389));
+        assert_eq!(nh(" 10.0.0.5:3390 ", "  "), s("10.0.0.5", 3390));
+        assert_eq!(nh("[fe80::1]:3390", ""), s("fe80::1", 3390));
+    }
+
+    #[test]
+    fn no_host() {
+        assert_eq!(nh("", ""), None);
+        assert_eq!(nh("Office PC", ""), None);
+        assert_eq!(nh("", "pc.example:port"), None);
+        assert_eq!(nh("", "[]"), None);
     }
 }
