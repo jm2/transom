@@ -13,6 +13,15 @@ downstream_package_name: transom
 upstream_project_url: https://github.com/jm2/transom
 upstream_tag_template: "v{version}"
 
+# Network, as for Tributary and Balun: the archive step runs cargo vendor where
+# Packit builds the SRPM (in COPR, with these packages). The RPM build itself stays
+# offline (cargo --offline, from the vendored crates).
+enable_net: true
+srpm_build_deps:
+  - cargo
+  - git-core
+  - xz
+
 actions:
   create-archive:
     - bash -c "scripts/dist.sh >/dev/null && mv dist/transom-*.tar.gz dist/transom-*-vendor.tar.xz build-aux/rpm/ && ls build-aux/rpm/transom-*[0-9].tar.gz"
