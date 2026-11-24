@@ -85,6 +85,45 @@ jobs:
           manifest-path: build-aux/flatpak/io.github.jm2.Transom.yml
           cache-key: flatpak-builder-${{ hashFiles('build-aux/flatpak/*', 'Cargo.lock') }}
 
+  # ── AppImage (Debian 13 base) ───────────────────────────────────────────────
+  # The release workflow builds both arches; this checks the bundling on each
+  # change: every library present and binding (the build smoke-tests the image).
+  appimage:
+    name: AppImage (x86_64)
+    runs-on: ubuntu-latest
+    container: debian:trixie
+    steps:
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          apt-get install -y build-essential pkg-config clang libclang-dev curl git \
+            libgtk-4-dev libadwaita-1-dev freerdp3-dev libwinpr3-dev libsecret-1-dev \
+            libavcodec-dev libavutil-dev patchelf squashfs-tools binutils libglib2.0-bin \
+            librsvg2-common dconf-gsettings-backend openssl-provider-legacy adwaita-icon-theme
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            ~/.cache/transom
+            target
+          key: appimage-trixie-x86_64-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: appimage-trixie-x86_64-cargo-
+      - name: Build the AppImage
+        run: scripts/build-linux.sh --appimage
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: transom-linux-x86_64-appimage
+          path: dist/transom-linux-x86_64.AppImage
+          if-no-files-found: error
+
   # ── MSRV (minimum supported Rust version), as Tributary/Balun ─────────────
   # Compile-proof for the `rust-version` in Cargo.toml (ADR 0003). The
   # toolchain is read from that field, so raising the floor stays a one-line

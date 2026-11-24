@@ -1,0 +1,67 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+# The Transom AppImage's entry point: point GTK, GDK-Pixbuf, GIO and OpenSSL at the
+# image's own files, take CA certificates and VA-API drivers from the host, then run
+# Transom. The bundled libraries find each other through their RUNPATH, not
+# LD_LIBRARY_PATH, so programs Transom starts don't inherit them.
+HERE=${APPDIR:-$(dirname "$(readlink -f "$0")")}
+
+# Icons (Adwaita, the app's own), GSettings schemas, and GIO modules: only the
+# image's, as the host's are built against the host's GLib.
+export XDG_DATA_DIRS="$HERE/usr/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+export GSETTINGS_SCHEMA_DIR="$HERE/usr/share/glib-2.0/schemas"
+export GIO_MODULE_DIR="$HERE/usr/lib/gio/modules"
+
+# The pixbuf loaders (SVG icons): GDK-Pixbuf's cache must name them by absolute
+# path, and the image is mounted somewhere new each run, so write the cache for this
+# mount point in the user's runtime directory. Caches of earlier runs are removed
+# after a day (a running Transom read its cache when it started).
+export GDK_PIXBUF_MODULEDIR="$HERE/usr/lib/gdk-pixbuf-2.0/2.10.0/loaders"
+cache_dir="${XDG_RUNTIME_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}}/io.github.jm2.Transom"
+if mkdir -p "$cache_dir" 2>/dev/null; then
+    key=$(printf '%s' "$HERE" | cksum | cut -d ' ' -f 1)
+    export GDK_PIXBUF_MODULE_FILE="$cache_dir/loaders-$key.cache"
+    if [ ! -s "$GDK_PIXBUF_MODULE_FILE" ]; then
+        # GLib prints debug messages on stdout: keep them out of the cache.
+        G_MESSAGES_DEBUG='' "$HERE/usr/bin/gdk-pixbuf-query-loaders" \
+            > "$GDK_PIXBUF_MODULE_FILE.$$" 2>/dev/null \
+            && mv -f "$GDK_PIXBUF_MODULE_FILE.$$" "$GDK_PIXBUF_MODULE_FILE"
+        rm -f "$GDK_PIXBUF_MODULE_FILE.$$"
+    fi
+    find "$cache_dir" -maxdepth 1 -name 'loaders-*.cache' -mmin +1440 \
+        ! -name "loaders-$key.cache" -exec rm -f {} + 2>/dev/null
+fi
+
+# OpenSSL's legacy provider (MD4 and RC4, for NTLM) from the image; its built-in
+# module path is Debian's.
+export OPENSSL_MODULES="$HERE/usr/lib/ossl-modules"
+
+# The host's CA certificates, wherever this distribution keeps them (OpenSSL's
+# built-in paths are Debian's).
+if [ -z "${SSL_CERT_FILE:-}" ]; then
+    for f in /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt \
+             /etc/ssl/ca-bundle.pem /etc/pki/tls/cacert.pem /etc/ssl/cert.pem; do
+        if [ -f "$f" ]; then
+            export SSL_CERT_FILE="$f"
+            break
+        fi
+    done
+fi
+if [ -z "${SSL_CERT_DIR:-}" ] && [ -d /etc/ssl/certs ]; then
+    export SSL_CERT_DIR=/etc/ssl/certs
+fi
+
+# The host's VA-API drivers, for hardware video decoding (libva's built-in path is
+# Debian's); without them Transom decodes in software.
+if [ -z "${LIBVA_DRIVERS_PATH:-}" ]; then
+    for d in "/usr/lib/$(uname -m)-linux-gnu/dri" /usr/lib64/dri /usr/lib/dri; do
+        if [ -d "$d" ]; then
+            LIBVA_DRIVERS_PATH="${LIBVA_DRIVERS_PATH:+$LIBVA_DRIVERS_PATH:}$d"
+        fi
+    done
+    if [ -n "${LIBVA_DRIVERS_PATH:-}" ]; then
+        export LIBVA_DRIVERS_PATH
+    fi
+fi
+
+exec "$HERE/usr/bin/transom" "$@"

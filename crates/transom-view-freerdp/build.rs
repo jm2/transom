@@ -19,9 +19,12 @@ fn main() {
                 panic!(
                     "FreeRDP >= {MIN_FREERDP} development files not found ({lib}): {e}\n\
                      Fedora: sudo dnf install freerdp-devel libwinpr-devel\n\
-                     Debian/Ubuntu: sudo apt install freerdp3-dev libwinpr3-dev\n\
+                     Debian 13 / Ubuntu 25.10: sudo apt install freerdp3-dev libwinpr3-dev\n\
+                     Arch: sudo pacman -S freerdp\n\
                      macOS: brew install freerdp\n\
-                     Windows: vcpkg install freerdp"
+                     Windows (MSYS2): pacman -S mingw-w64-clang-x86_64-freerdp \
+                     (mingw-w64-clang-aarch64-freerdp on arm64)\n\
+                     The scripts/build-* helpers check every dependency before building."
                 )
             });
         include_paths.extend(found.include_paths);

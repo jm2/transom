@@ -146,4 +146,5 @@ modules:
           - target
           - _flatpak
           - .flatpak-builder
+          - dist
       - cargo-sources.json

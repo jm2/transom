@@ -2,14 +2,18 @@
 
 | Platform | Package | Built by | Notes |
 |---|---|---|---|
-| Linux x86_64, aarch64 | Flatpak (GNOME 51) | `build-aux/flatpak/io.github.jm2.Transom.yml` | Builds its own FreeRDP (with RDPEAR); H.264 from codecs-extra |
-| Fedora 44+ | RPM | `build-aux/rpm/transom.spec` (offline, `scripts/dist.sh` tarballs); Packit → COPR (`.packit.yaml`) | Release workflow also builds an RPM with `cargo generate-rpm` |
-| Debian 13+, Ubuntu 25.10+ | .deb | `cargo deb -p transom` | Needs FreeRDP ≥ 3.15: Debian 12, Ubuntu 24.04 and 25.04 are too old |
-| Arch Linux | pkg.tar.zst | `build-aux/arch/PKGBUILD` (checkout); `build-aux/arch/PKGBUILD.aur` (AUR, release tarball) | |
+| Linux x86_64, aarch64 | Flatpak (GNOME 51) | `build-aux/flatpak/io.github.jm2.Transom.yml` (`scripts/build-linux.sh --flatpak`) | Builds its own FreeRDP (with RDPEAR); H.264 from codecs-extra |
+| Linux x86_64, aarch64 with glibc 2.39+ (Ubuntu 24.04+, Debian 13+, Fedora 42+, Arch, openSUSE Tumbleweed) | AppImage | `build-aux/appimage/build-appimage.sh` (`scripts/build-linux.sh --appimage`, on Debian 13) | Bundles Debian 13's GTK, FreeRDP and FFmpeg, leaving the host libraries on `build-aux/appimage/excludelist` (glibc, the graphics stack, …) to the system; the pinned AppImage type2 runtime |
+| Fedora 44+ | RPM | `build-aux/rpm/transom.spec` (offline, `scripts/dist.sh` tarballs); Packit → COPR (`.packit.yaml`) | Release workflow also builds an RPM with `cargo generate-rpm` (`scripts/build-linux.sh --rpm`) |
+| Debian 13+, Ubuntu 25.10+ | .deb | `cargo deb -p transom` (`scripts/build-linux.sh --deb`) | Needs FreeRDP ≥ 3.15: Debian 12, Ubuntu 24.04 and 25.04 are too old |
+| Arch Linux | pkg.tar.zst | `build-aux/arch/PKGBUILD` (committed HEAD, `scripts/build-linux.sh --arch-pkg`); `build-aux/arch/PKGBUILD.aur` (AUR, release tarball) | |
 | macOS 13+ (Apple silicon) | .app / .dmg | `scripts/build-macos.sh --dmg` (Homebrew) | Ad-hoc signed; not notarised yet |
 | Windows 10/11 x64, arm64 | portable .zip, Inno Setup installer | `scripts/build-windows.ps1 [-InnoSetup]` (MSYS2 CLANG64/CLANGARM64) | The installer registers `.rdp` and `rdp://` (optional task, off by default) |
 
-`.github/workflows/release.yml` builds all of these. Run with no tag, it packages the
+The three `scripts/build-*` helpers take the same modes as Tributary's and Balun's
+(`--help` / `-Help` lists them) and check every build dependency before building, naming
+the packages to install for anything missing. `.github/workflows/release.yml` builds all
+of these. Run with no tag, it packages the
 selected branch as a dry run. Run with a release tag, it builds every package from the
 tagged source, writes `SHA256SUMS.txt` over the exact asset list, attests build provenance
 (`gh attestation verify <file> --repo jm2/transom --signer-workflow
@@ -55,15 +59,17 @@ has none listed. `scripts/verify.sh` fails while the file is stale
 | .rpm (`cargo generate-rpm`) | `/usr/share/licenses/transom/`: `COPYING`, `RUST-CRATE-LICENSES.txt` |
 | RPM spec, Arch | `/usr/share/licenses/transom/`: `COPYING`, `LICENSE-APACHE`, `RUST-CRATE-LICENSES.txt` |
 | Flatpak | `/app/share/licenses/io.github.jm2.Transom/transom/`: the same three; flatpak-builder puts FreeRDP's and pcsc-lite's beside it |
+| AppImage | `usr/share/doc/transom/` in the image (`--appimage-extract` unpacks it): `COPYING`, `THIRD-PARTY-NOTICES.txt`, `RUST-CRATE-LICENSES.txt`, `BUNDLED-PACKAGES.txt`, `licenses/` |
 
 `THIRD-PARTY-NOTICES.txt` covers the native libraries (GTK, FreeRDP, FFmpeg, …) that only
-the Windows and macOS packages bundle; Linux packages use the system's. It carries the
-written source offer and points to `BUNDLED-PACKAGES.txt`, which the bundlers write at
-build time: every MSYS2 package (from pacman's local database) or Homebrew formula (from
-the Cellar keg each file resolves into) the bundle took files from, with its exact
-version, declared licence and source location. The licence files those packages ship go
-to `licenses/`. A bundled DLL, program or dylib that no package owns fails the build, since
-its source could not be named.
+the Windows, macOS and AppImage packages bundle; the other Linux packages use the system's.
+It carries the written source offer and points to `BUNDLED-PACKAGES.txt`, which the
+bundlers write at build time: every MSYS2 package (from pacman's local database), Homebrew
+formula (from the Cellar keg each file resolves into) or Debian package (from dpkg's
+database) the bundle took files from, with its exact version, licence (or, for Debian, its
+copyright file) and source location. The licence files those packages ship go to
+`licenses/`. A bundled DLL, program, dylib or shared library that no package owns fails the
+build, since its source could not be named.
 
 ## Feature availability by platform
 

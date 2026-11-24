@@ -8,7 +8,7 @@
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::path::PathBuf;
 use std::ptr;
-use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -16,9 +16,9 @@ use std::time::{Duration, Instant};
 use secrecy::ExposeSecret;
 use transom_view_core::config::{CertPolicy, SecurityMode, SessionConfig};
 use transom_view_core::engine::{
-    AuthKind, AuthRequest, CertDecision, CertPrompt, Credentials, DisconnectReason, EngineCommand,
-    EngineError, EngineEvent, EngineHandle, EventSink, Finished, InputEvent, MouseButton,
-    PointerEvent, PointerImage, RdpEngine, Rect, SharedFrame, Waker,
+    AuthKind, AuthRequest, CertDecision, CertPrompt, ConnectStage, Credentials, DisconnectReason,
+    EngineCommand, EngineError, EngineEvent, EngineHandle, EventSink, Finished, InputEvent,
+    MouseButton, PointerEvent, PointerImage, RdpEngine, Rect, SharedFrame, Waker,
 };
 use transom_view_core::geometry::{ScaleFactors, Size};
 use transom_view_core::monitors::{self, RemoteMonitor};
@@ -166,6 +166,8 @@ pub(crate) struct State {
     /// Set when the first Display Control channel connects; another one later
     /// means FreeRDP followed a redirection.
     disp_seen: AtomicBool,
+    /// The last [`ConnectStage`] reported (as `u8`; `u8::MAX`: none yet).
+    stage: AtomicU8,
 }
 
 impl State {
@@ -295,6 +297,7 @@ fn run(
         clip: Default::default(),
         connected_once: AtomicBool::new(false),
         disp_seen: AtomicBool::new(false),
+        stage: AtomicU8::new(u8::MAX),
     });
     // SAFETY: `session` upholds FreeRDP's lifecycle; `state` outlives the context.
     let reason = unsafe { session(&state, &rx, &waker, &config_dir) };
@@ -843,6 +846,20 @@ unsafe extern "C" fn client_new(
 type EventHandler = unsafe extern "C" fn(*mut c_void, *const ffi::ChannelConnectedEventArgs);
 type DisconnectedHandler =
     unsafe extern "C" fn(*mut c_void, *const ffi::ChannelDisconnectedEventArgs);
+type StateHandler = unsafe extern "C" fn(*mut c_void, *const StateChangedArgs);
+
+/// FreeRDP 3.27's `StateChangedEventArgs`, declared here because the oldest headers
+/// we build against lack its fields; libraries that old never send the event.
+#[repr(C)]
+struct StateChangedArgs {
+    e: ffi::wEventArgs,
+    old_state: ffi::CONNECTION_STATE,
+    new_state: ffi::CONNECTION_STATE,
+}
+
+/// [`State::stage`] once connected: later state changes (a reactivation) aren't
+/// progress to report.
+const STAGE_CONNECTED: u8 = u8::MAX - 1;
 
 unsafe extern "C" fn pre_connect(instance: *mut ffi::freerdp) -> ffi::BOOL {
     // SAFETY: valid instance with a context; PubSub copies the handler pointers.
@@ -873,8 +890,51 @@ unsafe extern "C" fn pre_connect(instance: *mut ffi::freerdp) -> ffi::BOOL {
         {
             return FALSE;
         }
+        // FreeRDP 3.27+ announces each step of the connection sequence; older
+        // versions don't, and the UI then shows fewer stages.
+        let progress: StateHandler = on_state_change;
+        if ffi::PubSub_Subscribe(ps, c"StateChanged".as_ptr(), progress) < 0 {
+            tracing::debug!("no StateChanged event (FreeRDP < 3.27): fewer progress stages");
+        }
+        // DNS, TCP and TLS happen before FreeRDP's first state change.
+        if let Some(state) = state(ctx) {
+            state.stage.store(u8::MAX, Ordering::SeqCst);
+            report_stage(state, ConnectStage::Contacting);
+        }
     }
     TRUE
+}
+
+/// Tell the UI about a new [`ConnectStage`] (once per stage, however many FreeRDP
+/// states it spans), and log it: the timestamps show where a slow connection waits.
+fn report_stage(state: &State, stage: ConnectStage) {
+    let last = state.stage.load(Ordering::SeqCst);
+    if last != STAGE_CONNECTED && state.stage.swap(stage as u8, Ordering::SeqCst) != stage as u8 {
+        tracing::info!(stage = stage.nick(), "connecting");
+        state.emit(EngineEvent::Progress(stage));
+    }
+}
+
+unsafe extern "C" fn on_state_change(ctx: *mut c_void, e: *const StateChangedArgs) {
+    // SAFETY: FreeRDP passes our context and the event's arguments, whose recorded
+    // size is checked before the fields past the header are read. It sends the event
+    // before it switches state, so freerdp_get_state would still give the old one.
+    unsafe {
+        let Some(state) = state(ctx.cast()) else {
+            return;
+        };
+        if e.is_null() || ((*e).e.Size as usize) < std::mem::size_of::<StateChangedArgs>() {
+            return;
+        }
+        let stage = match (*e).new_state {
+            ffi::CONNECTION_STATE_INITIAL | ffi::CONNECTION_STATE_NEGO => ConnectStage::Contacting,
+            ffi::CONNECTION_STATE_NLA | ffi::CONNECTION_STATE_AAD => ConnectStage::Authenticating,
+            // Connected (post_connect) follows.
+            ffi::CONNECTION_STATE_ACTIVE => return,
+            _ => ConnectStage::Configuring,
+        };
+        report_stage(state, stage);
+    }
 }
 
 unsafe extern "C" fn post_connect(instance: *mut ffi::freerdp) -> ffi::BOOL {
@@ -887,6 +947,7 @@ unsafe extern "C" fn post_connect(instance: *mut ffi::freerdp) -> ffi::BOOL {
         if ffi::gdi_init(instance, PIXEL_FORMAT_BGRX32) == 0 {
             return FALSE;
         }
+        clear_primary((*ctx).gdi);
         let proto = ffi::rdpPointer {
             size: std::mem::size_of::<TransomPointer>(),
             New: Some(pointer_new),
@@ -905,8 +966,8 @@ unsafe extern "C" fn post_connect(instance: *mut ffi::freerdp) -> ffi::BOOL {
 
         let gdi = (*ctx).gdi;
         let size = Size::new((*gdi).width as u32, (*gdi).height as u32);
+        // Black, like the primary buffer (clear_primary): nothing is drawn yet.
         let frame = SharedFrame::new(size);
-        copy_full(gdi, &frame);
         *state.frame.lock().unwrap_or_else(|e| e.into_inner()) = Some(frame.clone());
 
         let s = (*ctx).settings;
@@ -915,6 +976,7 @@ unsafe extern "C" fn post_connect(instance: *mut ffi::freerdp) -> ffi::BOOL {
             device: ffi::freerdp_settings_get_uint32(s, ffi::FreeRDP_DeviceScaleFactor),
         };
         state.connected_once.store(true, Ordering::SeqCst);
+        state.stage.store(STAGE_CONNECTED, Ordering::SeqCst);
         tracing::info!(?size, ?scale, "connected");
         state.emit(EngineEvent::Connected {
             desktop: size,
@@ -931,8 +993,10 @@ unsafe extern "C" fn post_disconnect(instance: *mut ffi::freerdp) {
         let ctx = (*instance).context;
         let on: EventHandler = on_channel_connected;
         let off: DisconnectedHandler = on_channel_disconnected;
+        let progress: StateHandler = on_state_change;
         ffi::PubSub_Unsubscribe((*ctx).pubSub, c"ChannelConnected".as_ptr(), on);
         ffi::PubSub_Unsubscribe((*ctx).pubSub, c"ChannelDisconnected".as_ptr(), off);
+        ffi::PubSub_Unsubscribe((*ctx).pubSub, c"StateChanged".as_ptr(), progress);
         ffi::gdi_free(instance);
     }
 }
@@ -1327,15 +1391,20 @@ unsafe fn primary_hwnd(gdi: *mut ffi::rdpGdi) -> *mut ffi::GDI_WND {
     unsafe { (*(*(*gdi).primary).hdc).hwnd }
 }
 
-/// Copy the whole GDI primary surface into `frame`, resizing it if needed.
+/// Paint FreeRDP's primary buffer black. GDI starts it, and every resized one, white
+/// (0xFF), and the server paints over it only after a round trip: copied as is, the
+/// session would flash white on connecting and on every resize.
 ///
 /// # Safety
 /// `gdi` must be valid.
-unsafe fn copy_full(gdi: *mut ffi::rdpGdi, frame: &SharedFrame) {
-    // SAFETY: per the contract.
-    let size = unsafe { Size::new((*gdi).width as u32, (*gdi).height as u32) };
-    // SAFETY: per the contract.
-    unsafe { copy_rects(gdi, frame, &[Rect::new(0, 0, size.width, size.height)]) };
+unsafe fn clear_primary(gdi: *mut ffi::rdpGdi) {
+    // SAFETY: per the contract; the primary buffer is `stride × height` bytes.
+    unsafe {
+        let buf = (*gdi).primary_buffer;
+        if !buf.is_null() {
+            ptr::write_bytes(buf, 0, (*gdi).stride as usize * (*gdi).height as usize);
+        }
+    }
 }
 
 /// # Safety
@@ -1435,13 +1504,16 @@ unsafe extern "C" fn desktop_resize(ctx: *mut ffi::rdpContext) -> ffi::BOOL {
         if ffi::gdi_resize(gdi, w, h) == 0 {
             return FALSE;
         }
+        clear_primary(gdi);
+        // Keep showing the old picture (cropped or padded) until the server repaints,
+        // rather than a blank one.
         let frame = state
             .frame
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone();
         if let Some(frame) = frame {
-            copy_full(gdi, &frame);
+            frame.lock().resize_keeping(Size::new(w, h));
         }
         tracing::info!(w, h, "desktop resized");
         state.emit(EngineEvent::DesktopResized(Size::new(w, h)));

@@ -137,7 +137,7 @@ end;
 // client may have registered the rdp: scheme since.
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
-  RootKey: HKEY;
+  RootKey: Integer;  // HKLM or HKCU (Pascal Script root keys are Integer constants)
   Command, Exe: String;
 begin
   if CurUninstallStep <> usUninstall then

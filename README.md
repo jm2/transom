@@ -99,6 +99,7 @@ gh attestation verify transom-amd64.deb --repo jm2/transom \
 | Platform | Package | Install |
 |---|---|---|
 | Linux (x86_64, aarch64) | `transom-linux-*.flatpak` | `flatpak install --user transom-linux-x86_64.flatpak` |
+| Linux with glibc 2.39+: Ubuntu 24.04+, Debian 13+, Fedora 42+, Arch, openSUSE Tumbleweed (x86_64, aarch64) | `transom-linux-*.AppImage` | `chmod +x transom-linux-x86_64.AppImage`, then run it |
 | Debian 13+, Ubuntu 25.10+ | `transom-amd64.deb`, `transom-arm64.deb` | `sudo apt install ./transom-amd64.deb` |
 | Fedora 44+ | `transom-x86_64.rpm`, `transom-aarch64.rpm` | `sudo dnf install ./transom-x86_64.rpm` |
 | Arch Linux | `transom-x86_64.pkg.tar.zst` | `sudo pacman -U transom-x86_64.pkg.tar.zst` |
@@ -106,8 +107,10 @@ gh attestation verify transom-amd64.deb --repo jm2/transom \
 | Windows 10/11 (x64, arm64) | `transom-windows-*-setup.exe`, `.zip` | Run the installer (it can register `.rdp` files and `rdp://` links), or unzip and run `bin\transom.exe` |
 
 Debian 12, Ubuntu 24.04 and Ubuntu 25.04 ship a FreeRDP that is too old (Transom needs 3.15 or
-newer); use the Flatpak there. Fedora COPR, AUR, winget and Flathub packages are planned after
-v0.1.0.
+newer); use the Flatpak there, or on Ubuntu the AppImage, which brings its own. The AppImage
+mounts itself with FUSE (without it, run it with `--appimage-extract-and-run`), and doesn't
+register `rdp://` links or `.rdp` files by itself; an AppImage integration tool can. Fedora
+COPR, AUR, winget and Flathub packages are planned after v0.1.0.
 
 ---
 
@@ -123,7 +126,6 @@ Fedora:
 ```sh
 sudo dnf install gcc clang-devel pkgconf-pkg-config freerdp-devel libwinpr-devel \
     gtk4-devel libadwaita-devel libsecret-devel libavcodec-free-devel libavutil-free-devel
-cargo run --release -p transom
 ```
 
 Debian 13 / Ubuntu 25.10:
@@ -131,16 +133,24 @@ Debian 13 / Ubuntu 25.10:
 ```sh
 sudo apt install build-essential pkg-config clang libclang-dev libgtk-4-dev \
     libadwaita-1-dev freerdp3-dev libwinpr3-dev libsecret-1-dev libavcodec-dev libavutil-dev
-cargo run --release -p transom
 ```
 
 Arch Linux:
 
 ```sh
 sudo pacman -S rust clang freerdp gtk4 libadwaita libsecret ffmpeg
-cargo run --release -p transom
 ```
 
+Then build:
+
+```sh
+scripts/build-linux.sh          # target/release/transom (or: cargo build --release -p transom)
+scripts/build-linux.sh --run    # build, then start it
+```
+
+The script checks every dependency first and, when something is missing, prints the
+command that installs it for your distribution. Distribution Rust is often older than
+1.98 (Debian 13 ships 1.85); use [rustup](https://rustup.rs) there.
 `scripts/install-local.sh` installs the binary, desktop file, icons and MIME type under
 `~/.local`. Fedora's `libavcodec-free` has no H.264 decoder; for hardware video decoding
 install RPM Fusion's `libavcodec-freeworld` and `mesa-va-drivers-freeworld`.
@@ -148,19 +158,31 @@ install RPM Fusion's `libavcodec-freeworld` and `mesa-va-drivers-freeworld`.
 ### Flatpak
 
 ```sh
-flatpak run org.flatpak.Builder --user --install --force-clean \
-    _flatpak build-aux/flatpak/io.github.jm2.Transom.yml
+scripts/build-linux.sh --flatpak    # dist/transom-linux-x86_64.flatpak (needs flatpak-builder)
+flatpak install --user dist/transom-linux-x86_64.flatpak
 ```
 
 The Flatpak builds its own FreeRDP (with Remote Credential Guard, smart cards, printers
 and USB). USB redirection additionally needs
 `flatpak override --user --device=all io.github.jm2.Transom`.
 
+### AppImage
+
+```sh
+scripts/build-linux.sh --appimage   # dist/transom-linux-x86_64.AppImage
+```
+
+The AppImage bundles the libraries of the system it's built on, so build it on Debian 13
+(elsewhere, in a `debian:trixie` container), as the release workflow does: the result runs
+on glibc 2.39 and later. `build-aux/appimage/` has the build script, the entry point and the
+list of libraries left to the host.
+
 ### macOS
 
 ```sh
 brew install gtk4 libadwaita freerdp ffmpeg adwaita-icon-theme pkg-config llvm create-dmg
 scripts/build-macos.sh --dmg    # dist/Transom.app and dist/Transom.dmg
+scripts/build-macos.sh --run    # or build and start it, without bundling
 ```
 
 ### Windows
@@ -183,8 +205,10 @@ pwsh scripts/build-windows.ps1 -InnoSetup
 ```
 
 `-InnoSetup` needs Inno Setup 6 already installed (`choco install innosetup`), or
-`TRANSOM_ISCC` set to the full path of `ISCC.exe`; without it the script stops after
-writing the zip.
+`TRANSOM_ISCC` set to the full path of `ISCC.exe`. Before building, the script checks the
+MSYS2 packages, the Rust target and a linker for Rust's host (Visual Studio's C++ build
+tools, or the gnullvm host toolchain), and prints the `pacman` or `rustup` command for
+anything missing.
 
 More detail, including the platform feature matrix, is in
 [docs/packaging.md](docs/packaging.md).
@@ -213,6 +237,25 @@ variables.
 
 ```sh
 scripts/verify.sh    # rustfmt, clippy -D warnings, tests, cargo-deny, Flatpak sources
+```
+
+The platform build scripts have the same modes as Tributary's and Balun's (`--help` or
+`-Help` lists them all):
+
+```sh
+scripts/build-linux.sh --fmt         # or build-macos.sh: cargo fmt
+scripts/build-linux.sh --check       # cargo check, every target
+scripts/build-linux.sh --clippy      # clippy -D warnings, debug and release profiles
+scripts/build-linux.sh --coverage    # coverage summary (cargo-llvm-cov)
+scripts/build-linux.sh --run         # build, then start Transom
+scripts/build-linux.sh --deb         # dist/transom-ARCH.deb; also --rpm, --arch-pkg, --flatpak, --appimage
+scripts/build-macos.sh --dmg         # dist/Transom.app and dist/Transom.dmg
+```
+
+```powershell
+pwsh scripts/build-windows.ps1 -Clippy                 # also -Fmt, -Check, -Test, -Coverage, -Run
+pwsh scripts/build-windows.ps1 -SkipBundle             # build transom.exe only
+pwsh scripts/build-windows.ps1 -InnoSetup -SkipBundle  # installer from the existing bundle
 ```
 
 Changes reach `main` only through pull requests; CI (Linux on x86_64 and aarch64,

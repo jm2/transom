@@ -3,17 +3,23 @@
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::time::Duration;
 
 use adw::prelude::*;
 use gtk::glib;
 use transom_view::TransomView;
-use transom_view::core::engine::{AuthKind, CertDecision, Credentials};
+use transom_view::core::engine::{AuthKind, CertDecision, ConnectStage, Credentials};
 use transom_view::core::profile::Profile;
 use transom_view::core::secrecy::SecretString;
 use transom_view::core::trust::TrustStatus;
 
 use crate::app::AppState;
 use crate::{dialogs, secrets};
+
+/// How long the connecting page waits for the remote's first picture after
+/// connecting before showing the session anyway (a server that sends nothing must not
+/// leave it hidden behind the page).
+const FIRST_FRAME_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub struct Session {
     pub profile: RefCell<Profile>,
@@ -31,6 +37,10 @@ pub struct Session {
     skip_saved_password: Cell<bool>,
     /// Fullscreen windows on the other monitors (multi-monitor mode).
     followers: RefCell<Vec<gtk::Window>>,
+    /// The connecting page's progress line, while that page is shown.
+    stage: RefCell<Option<gtk::Label>>,
+    /// Shows the session if the first picture doesn't arrive (FIRST_FRAME_TIMEOUT).
+    reveal_timer: RefCell<Option<glib::SourceId>>,
 }
 
 impl std::fmt::Debug for Session {
@@ -70,6 +80,8 @@ impl Session {
             auth_failures: Cell::new(0),
             skip_saved_password: Cell::new(false),
             followers: RefCell::new(Vec::new()),
+            stage: RefCell::new(None),
+            reveal_timer: RefCell::new(None),
         });
         session.wire();
         session
@@ -182,13 +194,42 @@ impl Session {
         });
 
         let weak = Rc::downgrade(self);
-        self.view.connect_connected(move |view| {
+        self.view.connect_progress(move |_, stage| {
+            let Some(s) = weak.upgrade() else { return };
+            s.set_stage(match stage {
+                ConnectStage::Contacting => "Contacting the remote computer…",
+                ConnectStage::Authenticating => "Signing in…",
+                ConnectStage::Configuring => "Setting up the session…",
+            });
+        });
+
+        // Connected: the credentials worked. Keep the connecting page up until the
+        // remote's first picture, which can take a while (a Windows sign-in, a new
+        // session); until then there is nothing to show but black.
+        let weak = Rc::downgrade(self);
+        self.view.connect_connected(move |_| {
             let Some(s) = weak.upgrade() else { return };
             s.auth_failures.set(0);
-            s.set_loading(false);
-            s.overlay.set_visible(false);
-            view.grab_focus();
             s.after_success();
+            if s.stage.borrow().is_some() {
+                s.set_stage("Waiting for the remote desktop…");
+                s.cancel_reveal_timer();
+                let weak = Rc::downgrade(&s);
+                let id = glib::timeout_add_local_once(FIRST_FRAME_TIMEOUT, move || {
+                    if let Some(s) = weak.upgrade() {
+                        s.reveal_timer.take();
+                        tracing::info!("no picture from the remote yet; showing the session");
+                        s.reveal();
+                    }
+                });
+                *s.reveal_timer.borrow_mut() = Some(id);
+            }
+        });
+        let weak = Rc::downgrade(self);
+        self.view.connect_first_frame(move |_| {
+            if let Some(s) = weak.upgrade() {
+                s.reveal();
+            }
         });
 
         let weak = Rc::downgrade(self);
@@ -269,11 +310,51 @@ impl Session {
         });
     }
 
+    /// Show the session in place of the connecting page.
+    fn reveal(&self) {
+        self.cancel_reveal_timer();
+        if self.stage.take().is_none() {
+            return;
+        }
+        // Take keyboard focus only from the connecting page (or from nowhere): while
+        // waiting, the user may have moved it to the window controls (Ctrl+Alt+Home)
+        // or to another tab.
+        let focus = self.view.root().and_then(|r| r.focus());
+        let ours = focus.as_ref().is_none_or(|f| {
+            f == self.overlay.upcast_ref::<gtk::Widget>() || f.is_ancestor(&self.overlay)
+        });
+        self.set_loading(false);
+        self.overlay.set_visible(false);
+        if ours {
+            self.view.grab_focus();
+        }
+    }
+
+    fn set_stage(&self, text: &str) {
+        if let Some(label) = self.stage.borrow().as_ref() {
+            label.set_label(text);
+        }
+    }
+
+    fn cancel_reveal_timer(&self) {
+        if let Some(id) = self.reveal_timer.take() {
+            id.remove();
+        }
+    }
+
     fn show_connecting(self: &Rc<Self>) {
         self.set_loading(true);
+        self.cancel_reveal_timer();
         let address = self.profile.borrow().address();
         let spinner = adw::Spinner::new();
         spinner.set_size_request(32, 32);
+        let stage = gtk::Label::builder()
+            .label("Contacting the remote computer…")
+            .wrap(true)
+            .justify(gtk::Justification::Center)
+            .accessible_role(gtk::AccessibleRole::Status)
+            .build();
+        stage.add_css_class("dim-label");
         let cancel = gtk::Button::with_mnemonic("_Cancel");
         cancel.add_css_class("pill");
         cancel.set_halign(gtk::Align::Center);
@@ -286,6 +367,7 @@ impl Session {
         });
         let bx = gtk::Box::new(gtk::Orientation::Vertical, 24);
         bx.append(&spinner);
+        bx.append(&stage);
         bx.append(&cancel);
         let page = adw::StatusPage::builder()
             .title("Connecting…")
@@ -294,10 +376,13 @@ impl Session {
             .build();
         self.overlay.set_child(Some(&page));
         self.overlay.set_visible(true);
+        *self.stage.borrow_mut() = Some(stage);
     }
 
     fn show_error(self: &Rc<Self>, reason: &str, auth: bool) {
         self.set_loading(false);
+        self.cancel_reveal_timer();
+        self.stage.take();
         let retry = gtk::Button::with_mnemonic(if auth { "_Try Again" } else { "_Reconnect" });
         retry.add_css_class("pill");
         retry.add_css_class("suggested-action");
@@ -355,6 +440,7 @@ impl Session {
     /// Close for good (tab closed).
     pub fn close(&self) {
         self.closing.set(true);
+        self.cancel_reveal_timer();
         self.exit_multimon();
         self.drain();
     }
