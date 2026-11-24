@@ -8,11 +8,12 @@
 #   scripts/test-servers.sh info    # print connection details again
 #   scripts/test-servers.sh down    # stop and remove containers + credentials
 #
-# Credentials are random per `up`, stored 0600 under ${TMPDIR:-/var/tmp}/transom-test.
+# Credentials are random per `up`, stored 0600 in the per-user state directory
+# ${TMPDIR:-/var/tmp}/transom-test-UID (scripts/lib/state.sh).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-STATE="${TMPDIR:-/var/tmp}/transom-test"
+source scripts/lib/state.sh
 GRD_PORT=13389
 XRDP_PORT=13390
 LOGIN_PORT=13391
@@ -57,7 +58,6 @@ new_creds() { # name user
 
 case "${1:-}" in
 up)
-    mkdir -p -m 700 "$STATE"
     new_creds grd transom
     new_creds xrdp rdp
     podman build -q -t transom-test-grd tests/servers/grd-headless >/dev/null
@@ -82,7 +82,6 @@ up)
     ;;
 login-up)
     # Separate because it's heavier (systemd, GDM, a full GNOME session per login).
-    mkdir -p -m 700 "$STATE"
     (umask 077
      printf 'rdp\n%s\nalice\n%s\n' "$(openssl rand -base64 18 | tr -d '/+=')" \
          "$(openssl rand -base64 18 | tr -d '/+=')" > "$STATE/login.creds"
