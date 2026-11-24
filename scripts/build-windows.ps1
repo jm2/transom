@@ -217,15 +217,14 @@ if ($compiles) {
         # The LLVM tools it runs: the llvm-tools rustup component (where cargo-llvm-cov
         # looks) unless LLVM_COV and LLVM_PROFDATA name them. CARGO_LLVM_COV_SETUP=no
         # below keeps it from installing the component itself.
-        if ($env:LLVM_COV -and $env:LLVM_PROFDATA) {
-            # cargo-llvm-cov uses them unchecked, and would fail only after the tests.
-            foreach ($v in 'LLVM_COV', 'LLVM_PROFDATA') {
-                $path = [Environment]::GetEnvironmentVariable($v)
-                if (-not (Get-Command $path -CommandType Application -ErrorAction SilentlyContinue)) {
-                    $problems.Add("${v}=${path}: not an executable")
-                }
+        # cargo-llvm-cov uses each override unchecked, and would fail only after the tests.
+        foreach ($v in 'LLVM_COV', 'LLVM_PROFDATA') {
+            $path = [Environment]::GetEnvironmentVariable($v)
+            if ($path -and -not (Get-Command $path -CommandType Application -ErrorAction SilentlyContinue)) {
+                $problems.Add("${v}=${path}: not an executable")
             }
-        } elseif (Get-Command rustc -ErrorAction SilentlyContinue) {
+        }
+        if (-not ($env:LLVM_COV -and $env:LLVM_PROFDATA) -and (Get-Command rustc -ErrorAction SilentlyContinue)) {
             $sysroot = rustc --print sysroot
             $hostTriple = ((rustc -vV) | Select-String '^host: (\S+)').Matches[0].Groups[1].Value
             if (-not (Test-Path (Join-Path $sysroot "lib\rustlib\$hostTriple\bin\llvm-cov.exe"))) {

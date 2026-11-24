@@ -73,14 +73,13 @@ check_component() {
 # component (where cargo-llvm-cov looks) unless LLVM_COV and LLVM_PROFDATA name them.
 # Callers run it with CARGO_LLVM_COV_SETUP=no, so it never installs the component.
 check_llvm_cov() {
-    local sysroot host
+    local sysroot host v
     check_tool_version cargo-llvm-cov 0.8.7 "cargo install --locked cargo-llvm-cov --version 0.8.7"
-    if [[ -n ${LLVM_COV:-} && -n ${LLVM_PROFDATA:-} ]]; then
-        # cargo-llvm-cov uses them unchecked, and would fail only after the tests.
-        command -v "$LLVM_COV" >/dev/null || problem "LLVM_COV=$LLVM_COV: not an executable"
-        command -v "$LLVM_PROFDATA" >/dev/null || problem "LLVM_PROFDATA=$LLVM_PROFDATA: not an executable"
-        return 0
-    fi
+    # cargo-llvm-cov uses each override unchecked, and would fail only after the tests.
+    for v in LLVM_COV LLVM_PROFDATA; do
+        [[ -z ${!v:-} ]] || command -v "${!v}" >/dev/null || problem "$v=${!v}: not an executable"
+    done
+    [[ -n ${LLVM_COV:-} && -n ${LLVM_PROFDATA:-} ]] && return 0
     command -v rustc >/dev/null || return 0   # check_rust reports it
     sysroot=$(rustc --print sysroot)
     host=$(rustc -vV | sed -n 's/^host: //p')
