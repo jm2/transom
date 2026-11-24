@@ -536,6 +536,11 @@ unsafe fn rcg_refused(ctx: *mut ffi::rdpContext, state: &State) -> bool {
         .contains(&name.as_str())
 }
 
+/// Why the connection attempt failed, for the UI.
+///
+/// # Safety
+/// `ctx` must be a valid context, owned by this thread, whose connection attempt
+/// has just failed.
 unsafe fn classify_error(ctx: *mut ffi::rdpContext, state: &State) -> DisconnectReason {
     if state.aborted() {
         return DisconnectReason::Local;

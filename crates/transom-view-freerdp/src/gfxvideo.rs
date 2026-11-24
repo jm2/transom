@@ -283,6 +283,10 @@ impl Hooks {
 // ---- helpers -----------------------------------------------------------------
 
 /// Our state from a graphics context (`custom` is FreeRDP's rdpGdi).
+///
+/// # Safety
+/// `gfx` must be a valid graphics context set up by FreeRDP's GDI: `custom` is null
+/// or its `rdpGdi`, whose context is a Transom context.
 unsafe fn state_of<'a>(gfx: *mut ffi::RdpgfxClientContext) -> Option<&'a State> {
     // SAFETY: FreeRDP's GDI sets `custom` to its rdpGdi, whose context is ours.
     unsafe {
@@ -312,6 +316,10 @@ fn rect16(r: &ffi::RECTANGLE_16) -> Rect {
 
 /// Run `f` on the hooks (unlocked again before returning), first acting on a pending
 /// disable request. `None` if not installed.
+///
+/// # Safety
+/// As for [`state_of`], and only on the graphics channel's thread, which owns the
+/// surfaces' memory that falling back to software writes.
 unsafe fn with_hooks<R>(
     gfx: *mut ffi::RdpgfxClientContext,
     f: impl FnOnce(&mut Hooks) -> R,
@@ -929,6 +937,9 @@ unsafe extern "C" fn map_output(
 }
 
 /// Scaled outputs and RemoteApp windows aren't shown as layers: software for those.
+///
+/// # Safety
+/// As for [`with_hooks`].
 unsafe fn unmappable(gfx: *mut ffi::RdpgfxClientContext, id: u16) -> Option<Orig> {
     // SAFETY: forwarded contract.
     unsafe {
