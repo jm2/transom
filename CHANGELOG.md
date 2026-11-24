@@ -30,8 +30,9 @@ The first release.
   renderer).
 - Screen reader labels and keyboard navigation.
 - The transom-view GTK 4 widget, with a C API, GObject Introspection and Vala bindings.
-- Packages: Flatpak, .deb, .rpm, Arch, macOS .dmg, Windows installer and .zip, each
-  with the licence notices of everything it contains.
+- Packages: Flatpak, AppImage (glibc 2.39 and later, so Ubuntu 24.04 too), .deb, .rpm,
+  Arch, macOS .dmg, Windows installer and .zip, each with the licence notices of
+  everything it contains.
 
 ### Security
 
