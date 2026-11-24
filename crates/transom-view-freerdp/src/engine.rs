@@ -236,20 +236,32 @@ unsafe fn cstr_opt(p: *const c_char) -> Option<String> {
     (!s.is_empty()).then_some(s)
 }
 
-/// Replace a malloc'd C string owned by FreeRDP.
+/// Replace a malloc'd C string owned by FreeRDP. The old value and the temporary
+/// copy are zeroed first: these slots hold user names and passwords.
 ///
 /// # Safety
-/// `slot` must point at a pointer that is null or was allocated with `malloc`.
+/// `slot` must point at a pointer that is null or was allocated with `malloc` and
+/// points at a NUL-terminated string.
 unsafe fn replace_cstring(slot: *mut *mut c_char, value: &str) -> bool {
     let Ok(c) = CString::new(value) else {
         return false;
     };
-    // SAFETY: per the contract; FreeRDP frees these with `free`.
-    unsafe {
-        libc::free((*slot).cast());
+    // SAFETY: per the contract; FreeRDP frees these with `free`. The old string is
+    // NUL-terminated, so `strlen` stays inside its allocation.
+    let ok = unsafe {
+        let old = *slot;
+        if !old.is_null() {
+            let len = libc::strlen(old);
+            for i in 0..len {
+                ptr::write_volatile(old.add(i), 0);
+            }
+        }
+        libc::free(old.cast());
         *slot = libc::strdup(c.as_ptr());
         !(*slot).is_null()
-    }
+    };
+    wipe(c);
+    ok
 }
 
 /// Zero a CString's bytes before dropping it (for secrets).
@@ -351,7 +363,15 @@ unsafe fn connect_and_loop(
             // hosts whose policy doesn't allow it) drop the connection at negotiation
             // when it is requested. Connect again without it: NLA still uses the
             // ticket, and Windows asks for the password on its logon screen.
-            tracing::info!("server refused Remote Credential Guard; connecting without it");
+            tracing::warn!("server refused Remote Credential Guard; connecting without it");
+            // Never silently: without RCG the password is typed on the remote's own
+            // logon screen, which is what RCG avoids (an attacker on the path can
+            // force this by dropping the first connection).
+            state.emit(EngineEvent::Notice(
+                "The server didn't accept Remote Credential Guard, so this session runs \
+                 without it: Windows may ask for your password on its own sign-in screen."
+                    .into(),
+            ));
             ffi::freerdp_client_stop(ctx);
             let settings = (*ctx).settings;
             ffi::freerdp_settings_set_bool(settings, ffi::FreeRDP_RemoteCredentialGuard, FALSE);
@@ -504,7 +524,13 @@ unsafe fn rcg_refused(ctx: *mut ffi::rdpContext, state: &State) -> bool {
         && ["TRANSPORT", "NEGO", "SECURITY"]
             .iter()
             .any(|k| name.contains(k))
-        && !["DNS", "CONNECT_FAILED"].iter().any(|k| name.contains(k))
+        // Exact names: SECURITY_NEGO_CONNECT_FAILED (a refusal) contains CONNECT_FAILED.
+        && ![
+            "ERRCONNECT_DNS_ERROR",
+            "ERRCONNECT_DNS_NAME_NOT_FOUND",
+            "ERRCONNECT_CONNECT_FAILED",
+        ]
+        .contains(&name.as_str())
 }
 
 unsafe fn classify_error(ctx: *mut ffi::rdpContext, state: &State) -> DisconnectReason {
@@ -822,6 +848,13 @@ unsafe extern "C" fn pre_connect(instance: *mut ffi::freerdp) -> ffi::BOOL {
     // SAFETY: valid instance with a context; PubSub copies the handler pointers.
     unsafe {
         let ctx = (*instance).context;
+        // freerdp_connect resets FreeRDP's abort event when it starts, so a cancel
+        // that arrived during setup would be lost: check ours here, after the reset
+        // and before anything is sent.
+        if state(ctx).is_some_and(|s| s.aborted()) {
+            tracing::info!("cancelled before connecting");
+            return FALSE;
+        }
         if let Some(state) = state(ctx)
             && state.connected_once.load(Ordering::SeqCst)
         {

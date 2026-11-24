@@ -347,7 +347,10 @@ impl WheelAccumulator {
         if !units.is_finite() {
             return Vec::new();
         }
-        self.remainder += units;
+        // A huge value (a misbehaving device, or 1e20) would otherwise loop for ever or
+        // queue millions of events: a thousand notches per event is plenty.
+        let limit = f64::from(WHEEL_NOTCH) * 1000.0;
+        self.remainder += units.clamp(-limit, limit);
         let mut whole = self.remainder.trunc();
         self.remainder -= whole;
         let mut out = Vec::new();
@@ -712,5 +715,14 @@ mod tests {
             let vp = viewport(req, widget, FitMode::Fit, (0.0, 0.0));
             prop_assert!(vp.is_pixel_exact(), "ratio {} for {:?} in {:?}", vp.ratio, req, widget);
         }
+    }
+
+    #[test]
+    fn huge_wheel_values_are_bounded() {
+        let mut w = WheelAccumulator::default();
+        let out = w.push(1e20);
+        assert_eq!(out.len(), 1000);
+        assert!(out.iter().all(|&s| s == WHEEL_NOTCH as i16));
+        assert_eq!(w.push(-1e20).len(), 1000);
     }
 }
