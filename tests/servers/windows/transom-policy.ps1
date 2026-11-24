@@ -21,6 +21,9 @@ Set-Policy $ts fDisableAudioCapture 0
 Set-Policy $ts fDisableCdm 0
 Set-Policy $ts fDisableClip 0
 Set-Policy $ts fDisableCameraRedir 0
+# USB (PnP) redirection: Windows 11 doesn't open the URBDRC channel unless this is
+# explicitly 0 ("Do not allow supported Plug and Play device redirection": Disabled).
+Set-Policy $ts fDisablePNPRedir 0
 # RemoteApp without a Connection Broker (Transom's RemoteApp tests): allow any program.
 Set-Policy 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Terminal Server\TSAppAllowList' fDisabledAllowList 1
 
@@ -38,4 +41,4 @@ Start-Service Audiosrv
 
 # Report what is in effect, so `winvm.sh configure` shows a verifiable result.
 Get-ItemProperty $ts | Select-Object AVC444ModePreferred, AVCHardwareEncodePreferred,
-    fDisableAudioCapture, fDisableCdm, fDisableClip, fDisableCameraRedir | Format-List
+    fDisableAudioCapture, fDisableCdm, fDisableClip, fDisableCameraRedir, fDisablePNPRedir | Format-List
