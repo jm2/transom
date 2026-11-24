@@ -824,7 +824,11 @@ fn install_file_clip_test(view: &TransomView) {
                     .unwrap_or(p)
                     .to_string_lossy()
                     .into_owned();
-                out.insert(rel, format!("{:x}", Sha256::digest(&data)));
+                let hex = Sha256::digest(&data)
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect();
+                out.insert(rel, hex);
             }
         }
         let mut out = Default::default();
