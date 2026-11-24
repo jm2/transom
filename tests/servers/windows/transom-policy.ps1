@@ -27,6 +27,10 @@ Set-Policy $ts fDisablePNPRedir 0
 # RemoteApp without a Connection Broker (Transom's RemoteApp tests): allow any program.
 Set-Policy 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Terminal Server\TSAppAllowList' fDisabledAllowList 1
 
+# No taskbar widgets: the weather tile shows the location derived from the network,
+# which mustn't end up in screenshots.
+Set-Policy 'HKLM:\SOFTWARE\Policies\Microsoft\Dsh' AllowNewsAndInterests 0
+
 # Keep a test VM quiet and awake: no sleep, no surprise update reboots mid-test.
 powercfg /change standby-timeout-ac 0
 powercfg /change monitor-timeout-ac 0
