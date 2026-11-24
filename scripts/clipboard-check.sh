@@ -52,12 +52,16 @@ grep -q 'REMOTE TEXT: "hello from grd ✓"' "$STATE/cliptest.out" \
 
 # --- Widget pass: transom-view-demo's GDK clipboard <-> remote probe.
 echo "--- widget path (GDK clipboard <-> TransomView bridge <-> RDP)"
+# The bridge exchanges content only while the session has keyboard focus: the
+# demo gets it as a user would, by a click (inject-focus.py).
 cargo build -q -p transom-view --example transom-view-demo
 podman exec transom-grd pkill -f input-probe || true
 podman exec transom-grd bash -c 'rm -f /tmp/input-probe.log /tmp/probe-cmd'
 podman run --rm --network host --userns=keep-id \
     -e SCALE=1 -e MONITOR=1600x1000 -e BIN=/demo/examples/transom-view-demo \
     -e RUST_LOG="${RUST_LOG:-}" \
+    -e INJECT=/checks/inject-focus.py -e INJECT_AFTER=4 \
+    -v "$PWD/tests/servers/view-check:/checks:ro,Z" \
     -v "$PWD/target/debug:/demo:ro,Z" \
     -v "$PWD/tests/servers/view-check/inner.sh:/inner.sh:ro,Z" \
     -v "$STATE:/state:Z" \
@@ -102,6 +106,8 @@ podman exec transom-grd bash -c 'rm -rf /tmp/input-probe.log /tmp/probe-cmd /tmp
 podman run --rm --network host --userns=keep-id \
     -e SCALE=1 -e MONITOR=1600x1000 -e BIN=/demo/examples/transom-view-demo \
     -e RUST_LOG="${RUST_LOG:-}" \
+    -e INJECT=/checks/inject-focus.py -e INJECT_AFTER=4 \
+    -v "$PWD/tests/servers/view-check:/checks:ro,Z" \
     -v "$PWD/target/debug:/demo:ro,Z" \
     -v "$PWD/tests/servers/view-check/inner.sh:/inner.sh:ro,Z" \
     -v "$STATE:/state:Z" \

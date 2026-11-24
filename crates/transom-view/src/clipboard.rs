@@ -215,9 +215,9 @@ impl ClipboardBridge {
 
     /// The remote asks for our clipboard in `format`.
     pub fn data_requested(&self, view: &TransomView, format: ClipFormat) {
-        let (mode, cb) = {
+        let (mode, cb, generation) = {
             let s = self.0.borrow();
-            (s.mode, s.clipboard.clone())
+            (s.mode, s.clipboard.clone(), s.local_gen)
         };
         let (Some(mode), Some(cb)) = (mode, cb) else {
             view.send_command(EngineCommand::ClipboardReply { format, data: None });
@@ -228,10 +228,13 @@ impl ClipboardBridge {
             return;
         }
         let view = view.clone();
+        let bridge = self.clone();
         if format == ClipFormat::Files {
-            let bridge = self.clone();
             glib::spawn_future_local(async move {
-                let files = read_local_files(&cb).await.unwrap_or_default();
+                let mut files = read_local_files(&cb).await.unwrap_or_default();
+                if !bridge.unchanged_since(&cb, generation) {
+                    files.clear();
+                }
                 let descriptors: Vec<FileDescriptor> =
                     files.iter().map(|(_, d)| d.clone()).collect();
                 tracing::debug!(count = descriptors.len(), "offering local files");
@@ -243,12 +246,25 @@ impl ClipboardBridge {
             return;
         }
         glib::spawn_future_local(async move {
-            let data = read_local(&cb, format).await;
+            let mut data = read_local(&cb, format).await;
             if data.is_none() {
                 tracing::debug!(?format, "could not read local clipboard");
+            } else if !bridge.unchanged_since(&cb, generation) {
+                data = None;
             }
             view.send_command(EngineCommand::ClipboardReply { format, data });
         });
+    }
+
+    /// The local clipboard hasn't changed since `generation` and isn't concealed.
+    /// Reads are asynchronous: what they return may already be a newer copy (a
+    /// password the user copied meanwhile), which must not reach the remote.
+    fn unchanged_since(&self, cb: &gdk::Clipboard, generation: u64) -> bool {
+        let unchanged = self.0.borrow().local_gen == generation && !concealed(cb);
+        if !unchanged {
+            tracing::debug!("local clipboard changed during the read; not sending it");
+        }
+        unchanged
     }
 
     /// The remote clipboard changed.
