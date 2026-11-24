@@ -235,7 +235,7 @@ impl Profile {
                 username: None,
                 // Sending the session password to the gateway is opt-in: a file names
                 // the gateway, so it could name an attacker's.
-                same_credentials: f.get_bool("promptcredentialonce").unwrap_or(false),
+                same_credentials: f.get_int("promptcredentialonce") == Some(1),
             });
         }
         for (k, v) in f.iter() {
@@ -613,6 +613,23 @@ mod tests {
             !out.contains("drivestoredirect") && !out.contains("alternate shell"),
             "{out}"
         );
+        // Only an explicit 1 shares the session password with the gateway.
+        for (v, shared) in [
+            ("", false),
+            ("0", false),
+            ("1", true),
+            ("2", false),
+            ("-1", false),
+        ] {
+            let line = if v.is_empty() {
+                String::new()
+            } else {
+                format!("promptcredentialonce:i:{v}\n")
+            };
+            let f = RdpFile::parse_str(&format!("full address:s:pc\ngatewayhostname:s:gw\n{line}"));
+            let gw = Profile::from_rdp(&f).unwrap().gateway.unwrap();
+            assert_eq!(gw.same_credentials, shared, "promptcredentialonce {v:?}");
+        }
         // "Don't use a gateway" (4) means no gateway.
         let f =
             RdpFile::parse_str("full address:s:pc\ngatewayhostname:s:gw\ngatewayusagemethod:i:4\n");
