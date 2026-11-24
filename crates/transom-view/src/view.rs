@@ -156,6 +156,10 @@ mod imp {
                     Signal::builder("credentials-required")
                         .param_types([String::static_type(), String::static_type()])
                         .build(),
+                    // (text): something the user should know about the session.
+                    Signal::builder("notice")
+                        .param_types([String::static_type()])
+                        .build(),
                 ]
             })
         }
@@ -278,9 +282,10 @@ mod imp {
                     (fy1 - fy0) as f32,
                 );
                 for r in layer.region.rects() {
+                    // The origin comes from the server.
                     let r = Rect::new(
-                        r.x + layer.origin.0,
-                        r.y + layer.origin.1,
+                        r.x.saturating_add(layer.origin.0),
+                        r.y.saturating_add(layer.origin.1),
                         r.width,
                         r.height,
                     );
@@ -642,6 +647,9 @@ mod imp {
                         "certificate-prompt",
                         &[&host, &port, &subject, &issuer, &fp, &prev],
                     );
+                }
+                EngineEvent::Notice(text) => {
+                    self.obj().emit_by_name::<()>("notice", &[&text]);
                 }
                 EngineEvent::Redirecting { target } => {
                     tracing::info!(%target, "server redirection");
@@ -1246,6 +1254,15 @@ impl TransomView {
             "connected",
             false,
             glib::closure_local!(move |v: &TransomView| f(v)),
+        )
+    }
+
+    /// Something the user should know about the session (plain text).
+    pub fn connect_notice<F: Fn(&Self, &str) + 'static>(&self, f: F) -> glib::SignalHandlerId {
+        self.connect_closure(
+            "notice",
+            false,
+            glib::closure_local!(move |v: &TransomView, text: String| f(v, &text)),
         )
     }
 

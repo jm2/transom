@@ -50,8 +50,19 @@ struct Orig {
     end_frame: ffi::pcRdpgfxEndFrame,
 }
 
+/// Most region rectangles taken from one AVC420 command, and kept per surface: past
+/// these, that surface falls back to software (the server controls both counts, and
+/// region bookkeeping and rendering cost grow with them).
+const MAX_COMMAND_RECTS: usize = 64;
+const MAX_SURFACE_RECTS: usize = 256;
+/// Hardware decoders (one VA-API device and frame pool each) per session; further
+/// surfaces decode in software.
+const MAX_HW_DECODERS: usize = 4;
+
 #[derive(Default)]
 struct Surface {
+    /// Size from Create Surface (pixels).
+    size: (u32, u32),
     decoder: Option<H264Decoder>,
     frame: Option<Arc<HwFrame>>,
     /// Download of `frame`, made on the first read-back from it.
@@ -81,6 +92,8 @@ struct Stats {
 pub(crate) struct Hooks {
     orig: Orig,
     verify: bool,
+    /// Hardware decoding was turned off: surfaces created later start in software.
+    all_software: bool,
     surfaces: HashMap<u16, Surface>,
     /// Removed surfaces whose layer must be dropped by the renderer.
     removed: Vec<u16>,
@@ -224,6 +237,7 @@ pub(crate) unsafe fn attach(state: &State, gfx: *mut ffi::RdpgfxClientContext) {
         *state.video.hooks.lock().unwrap_or_else(|e| e.into_inner()) = Some(Hooks {
             orig,
             verify: state.config.video_decode == VideoDecode::Verify,
+            all_software: false,
             surfaces: HashMap::new(),
             removed: Vec::new(),
             stats: Stats::default(),
@@ -278,6 +292,13 @@ unsafe fn state_of<'a>(gfx: *mut ffi::RdpgfxClientContext) -> Option<&'a State> 
     }
 }
 
+/// `r` clipped to a `w`×`h` surface; `None` if nothing is left.
+fn clip(r: Rect, w: u32, h: u32) -> Option<Rect> {
+    let x2 = r.x.saturating_add(r.width).min(w);
+    let y2 = r.y.saturating_add(r.height).min(h);
+    (r.x < x2 && r.y < y2).then(|| Rect::new(r.x, r.y, x2 - r.x, y2 - r.y))
+}
+
 fn rect16(r: &ffi::RECTANGLE_16) -> Rect {
     Rect::new(
         r.left as u32,
@@ -298,6 +319,7 @@ unsafe fn with_hooks<R>(
     let mut g = st.video.hooks.lock().unwrap_or_else(|e| e.into_inner());
     let h = g.as_mut()?;
     if st.video.disable.swap(false, Ordering::SeqCst) {
+        h.all_software = true;
         let ids: Vec<u16> = h.surfaces.keys().copied().collect();
         for id in ids {
             // SAFETY: as above; we're on the channel thread that owns surface memory.
@@ -462,22 +484,53 @@ unsafe extern "C" fn surface_command(
             if !(avc && usable) {
                 // Another codec (or a software surface): it may write only parts of
                 // its rectangle (RemoteFX tiles, alpha), so keep what it doesn't.
-                h.before_write(gfx, id, rect, true);
+                // Progressive commands come with an empty rectangle but may paint
+                // anywhere on the surface: treat them as covering all of it.
+                let r = if rect.width == 0 || rect.height == 0 {
+                    let (w, hh) = h.surfaces.get(&id).map_or((0, 0), |s| s.size);
+                    Rect::new(0, 0, w, hh)
+                } else {
+                    rect
+                };
+                h.before_write(gfx, id, r, true);
                 return Next::Software;
             }
             let bs = &*(c.extra as *const ffi::RDPGFX_AVC420_BITMAP_STREAM);
             let data = std::slice::from_raw_parts(bs.data, bs.length as usize);
-            let rects: Vec<Rect> = if bs.meta.regionRects.is_null() {
+            let n = if bs.meta.regionRects.is_null() {
+                0
+            } else {
+                bs.meta.numRegionRects as usize
+            };
+            if n > MAX_COMMAND_RECTS {
+                tracing::warn!(surface = id, rects = n, "too many video region rectangles");
+                h.fall_back_to_software(gfx, id);
+                return Next::Software;
+            }
+            let (sw, sh) = h.surfaces.get(&id).map_or((0, 0), |s| s.size);
+            // Clipped to the surface: FreeRDP checks only that each is well formed.
+            let rects: Vec<Rect> = if n == 0 {
                 Vec::new()
             } else {
-                std::slice::from_raw_parts(bs.meta.regionRects, bs.meta.numRegionRects as usize)
+                std::slice::from_raw_parts(bs.meta.regionRects, n)
                     .iter()
-                    .map(rect16)
+                    .filter_map(|r| clip(rect16(r), sw, sh))
                     .collect()
             };
+            let decoders = h.surfaces.values().filter(|s| s.decoder.is_some()).count();
             let s = h.surfaces.get_mut(&id).expect("checked");
+            if s.decoder.is_none() && decoders >= MAX_HW_DECODERS {
+                tracing::info!(surface = id, "hardware decoder limit reached; software");
+                h.fall_back_to_software(gfx, id);
+                return Next::Software;
+            }
             if s.decoder.is_none() {
-                match H264Decoder::new() {
+                // The decoder refuses streams larger than the surface they draw on.
+                // H.264 codes whole macroblocks, so a 1280×761 surface arrives as a
+                // 1280×768 picture: allow for alignment (64 covers any encoder's).
+                let align = |v: u32| u64::from(v.div_ceil(64) * 64);
+                let max_pixels = (align(sw) * align(sh)).max(64 * 64) as i64;
+                match H264Decoder::new(max_pixels) {
                     Ok(d) => s.decoder = Some(d),
                     Err(e) => {
                         tracing::warn!("hardware decoder: {e}");
@@ -493,6 +546,11 @@ unsafe extern "C" fn surface_command(
                     s.nv12 = None;
                     for r in &rects {
                         s.region.union_rect(*r);
+                    }
+                    if s.region.rects().len() > MAX_SURFACE_RECTS {
+                        tracing::warn!(surface = id, "video region too fragmented");
+                        h.fall_back_to_software(gfx, id);
+                        return Next::Software;
                     }
                     s.new_frame = true;
                     s.dirty = true;
@@ -730,8 +788,14 @@ unsafe extern "C" fn create_surface(
     // SAFETY: valid context and PDU.
     unsafe {
         let id = (*pdu).surfaceId;
+        let size = ((*pdu).width as u32, (*pdu).height as u32);
         match with_hooks(gfx, |h| {
-            if let Some(old) = h.surfaces.insert(id, Surface::default())
+            let new = Surface {
+                size,
+                software: h.all_software,
+                ..Default::default()
+            };
+            if let Some(old) = h.surfaces.insert(id, new)
                 && old.shown
             {
                 h.removed.push(id);
@@ -787,16 +851,22 @@ unsafe extern "C" fn map_output(
     // SAFETY: valid context and PDU.
     unsafe {
         let p = &*pdu;
-        match with_hooks(gfx, |h| {
-            if let Some(s) = h.surfaces.get_mut(&p.surfaceId) {
-                s.origin = (p.outputOriginX, p.outputOriginY);
-                s.mapped = true;
-                s.dirty = true;
-            }
-        }) {
-            Some((_, o)) => call!(o, map_output, gfx, pdu),
-            None => OK,
+        let Some((_, o)) = with_hooks(gfx, |_| ()) else {
+            return OK;
+        };
+        // FreeRDP validates the mapping (surface exists, origin within the output);
+        // record it only once it's accepted.
+        let rc = call!(o, map_output, gfx, pdu);
+        if rc == OK {
+            with_hooks(gfx, |h| {
+                if let Some(s) = h.surfaces.get_mut(&p.surfaceId) {
+                    s.origin = (p.outputOriginX, p.outputOriginY);
+                    s.mapped = true;
+                    s.dirty = true;
+                }
+            });
         }
+        rc
     }
 }
 

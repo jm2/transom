@@ -328,6 +328,7 @@ fn main() -> ExitCode {
             | Ok(EngineEvent::ClipboardFileRequest { .. })
             | Ok(EngineEvent::ClipboardFileData { .. }) => {} // never offered anything
             Ok(EngineEvent::Redirecting { target }) => eprintln!("redirecting to {target}"),
+            Ok(EngineEvent::Notice(text)) => eprintln!("notice: {text}"),
             Ok(EngineEvent::AuthRequired(req)) if args.kerberos => {
                 // Empty credentials: proceed without a password (Kerberos ticket).
                 eprintln!("credentials requested; answering empty for Kerberos");

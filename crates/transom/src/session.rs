@@ -180,6 +180,17 @@ impl Session {
         });
 
         let weak = Rc::downgrade(self);
+        self.view.connect_notice(|view, text| {
+            // The window's toast overlay wraps every session.
+            if let Some(toasts) = view
+                .ancestor(adw::ToastOverlay::static_type())
+                .and_downcast::<adw::ToastOverlay>()
+            {
+                let toast = adw::Toast::new(&glib::markup_escape_text(text));
+                toast.set_timeout(0); // stays until dismissed
+                toasts.add_toast(toast);
+            }
+        });
         self.view.connect_disconnected(move |_, reason| {
             let Some(s) = weak.upgrade() else { return };
             s.set_loading(false);
