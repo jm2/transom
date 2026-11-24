@@ -11,8 +11,9 @@
 
 `.github/workflows/release.yml` builds all of these from a release tag. It writes
 `SHA256SUMS.txt` over the exact asset list, attests build provenance
-(`gh attestation verify <file> --repo jm2/transom`), and attaches everything to the
-GitHub release.
+(`gh attestation verify <file> --repo jm2/transom --signer-workflow
+jm2/transom/.github/workflows/release.yml`), and attaches everything to the GitHub
+release.
 
 ## Feature availability by platform
 
