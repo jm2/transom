@@ -241,7 +241,7 @@ for, and test refusals as well as success.
       the port but doesn't expose it (docs/known-issues.md).
 - [ ] Media Transfer Protocol (MTP) and Picture Transfer Protocol (PTP) devices
       (MS-RDPEPNP): FreeRDP has no client, so it would be our own channel. Lowest priority.
-- [x] Generic USB (MS-RDPEUSB / URBDRC, FreeRDP's libusb backend): device picker with
+- [ ] Generic USB (MS-RDPEUSB / URBDRC, FreeRDP's libusb backend): device picker with
       hotplug, VID:PID allow/deny lists, never offer HID keyboards/mice or the device the
       session is using. Requires udev access (document a uaccess rule; Flatpak needs
       `--device=all`). Windows client: needs WinUSB bound to the device. macOS: only
@@ -249,7 +249,7 @@ for, and test refusals as well as success.
       refusal, fall back to the class channel above when one fits (drive, smartcard,
       camera, audio). Test: a virtual USB device (dummy_hcd + configfs gadget, needs root
       once) or a spare stick, against both VMs.
-      **Done on Linux (2026-11-23):** `scripts/usb-check.sh` with a real FT232R against
+      **Partly done — Linux (2026-11-23):** `scripts/usb-check.sh` with a real FT232R against
       the Windows 11 VM (redirect, return, refusal). Windows 11 needs the PnP policy
       explicitly Disabled (docs/usb.md). Still open: device lists on macOS and Windows,
       and a class re-check for devices plugged in mid-session.
