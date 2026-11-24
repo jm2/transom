@@ -49,6 +49,7 @@ GTK app runs on macOS and Windows.
 | Translations | 🚧 Planned |
 | Packages: Flatpak, AppImage, .deb, .rpm, Arch, macOS .dmg, Windows installer and .zip | ✅ Built by the release workflow, for x86_64 and arm64 where the platform has it |
 | The RDP engine (FreeRDP, FFmpeg) in a separate, sandboxed helper process | 🚧 Planned, not yet implemented: today it runs inside Transom's process, and only the Flatpak sandbox contains it ([#18](https://github.com/jm2/transom/issues/18)) |
+| A second, memory-safe engine ([IronRDP](https://github.com/Devolutions/IronRDP), in Rust), first for connections opened from `.rdp` files and `rdp://` links | 🚧 Planned, not yet implemented ([#20](https://github.com/jm2/transom/issues/20)) |
 | Linux, macOS, Windows | ✅ Linux daily; macOS (Apple silicon) and Windows 11 tested |
 | Light and dark style | ✅ Automatic (libadwaita) |
 
@@ -64,7 +65,9 @@ Known limitations are listed in [docs/known-issues.md](docs/known-issues.md).
   run inside Transom's process. A bug a hostile server exploits there runs as you, except
   in the **Flatpak**, whose sandbox contains it. For servers you don't trust, use the
   Flatpak. Moving the engine into a sandboxed helper process is planned, not yet
-  implemented ([#18](https://github.com/jm2/transom/issues/18)).
+  implemented ([#18](https://github.com/jm2/transom/issues/18)), and so is a second,
+  memory-safe engine (IronRDP), first for connections from files and links
+  ([#20](https://github.com/jm2/transom/issues/20)).
 - **Bundled libraries:** the AppImage, macOS and Windows packages carry their own FreeRDP,
   FFmpeg and OpenSSL, and are rebuilt and released when those publish security fixes.
 
