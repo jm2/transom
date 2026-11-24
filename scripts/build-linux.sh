@@ -40,6 +40,11 @@ Packaging (any combination; written to dist/ under the release asset names):
   --flatpak     dist/transom-linux-ARCH.flatpak with flatpak-builder (or the
                 org.flatpak.Builder Flatpak) from the user's flathub remote. It
                 builds in the GNOME SDK, so needs no host libraries or Rust.
+  --appimage    dist/transom-linux-ARCH.AppImage (build-aux/appimage/). Build it on
+                Debian 13, as the release workflow does: it bundles the build
+                system's libraries, and runs where the C library is as new as
+                they need (glibc 2.39, Ubuntu 24.04). Downloads the pinned AppImage
+                runtime once (checked against its SHA-256).
 
 Other:
   -h, --help    Show this help and exit.
@@ -52,7 +57,7 @@ EOF
 usage_error() { echo "build-linux: $*" >&2; usage >&2; exit 2; }
 fail() { echo "build-linux: $*" >&2; exit 1; }
 
-FMT=0 CHECK=0 CLIPPY=0 COVERAGE=0 RUN=0 DEB=0 RPM=0 ARCH_PKG=0 FLATPAK=0
+FMT=0 CHECK=0 CLIPPY=0 COVERAGE=0 RUN=0 DEB=0 RPM=0 ARCH_PKG=0 FLATPAK=0 APPIMAGE=0
 for a in "$@"; do
     case $a in
         -h|--help) usage; exit 0 ;;
@@ -65,11 +70,12 @@ for a in "$@"; do
         --rpm) RPM=1 ;;
         --arch-pkg) ARCH_PKG=1 ;;
         --flatpak) FLATPAK=1 ;;
+        --appimage) APPIMAGE=1 ;;
         *) usage_error "unknown option: $a" ;;
     esac
 done
 quick=$((FMT + CHECK + CLIPPY + COVERAGE))
-packaging=$((DEB + RPM + ARCH_PKG + FLATPAK))
+packaging=$((DEB + RPM + ARCH_PKG + FLATPAK + APPIMAGE))
 (( quick <= 1 )) || usage_error "choose at most one of --fmt, --check, --clippy and --coverage"
 (( quick == 0 || packaging == 0 )) || usage_error "a quick-exit mode can't be combined with packaging"
 (( RUN == 0 || quick + packaging == 0 )) || usage_error "--run can't be combined with other modes"
@@ -84,7 +90,7 @@ fi
 [[ $(uname) == Linux ]] || fail "run this on Linux (scripts/build-macos.sh, scripts/build-windows.ps1)"
 # The host build: everything but a packaging run of only --arch-pkg/--flatpak, which
 # build in their own environments.
-HOST=$(( packaging == 0 || DEB || RPM ))
+HOST=$(( packaging == 0 || DEB || RPM || APPIMAGE ))
 
 # ---- dependency checks (everything first, then one report) ----
 distro=$(. /etc/os-release 2>/dev/null; echo " ${ID:-} ${ID_LIKE:-} ")
@@ -172,6 +178,31 @@ if (( FLATPAK )); then
             || problem "the user's flathub remote: flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo"
     else
         problem "flatpak"
+    fi
+fi
+if (( APPIMAGE )); then
+    if command -v dpkg-query >/dev/null; then
+        before=${#PROBLEMS[@]}
+        check_cmd patchelf "patchelf"
+        check_cmd mksquashfs "squashfs-tools"
+        check_cmd readelf "binutils"
+        check_cmd glib-compile-schemas "libglib2.0-bin"
+        [[ -n ${APPIMAGE_RUNTIME:-} ]] || check_cmd curl "curl (or set APPIMAGE_RUNTIME to a downloaded runtime)"
+        multiarch=/usr/lib/$(uname -m)-linux-gnu
+        for f in "$multiarch/gdk-pixbuf-2.0/gdk-pixbuf-query-loaders:libgdk-pixbuf-2.0-0" \
+                 "$multiarch/gdk-pixbuf-2.0/2.10.0/loaders/libpixbufloader_svg.so:librsvg2-common" \
+                 "$multiarch/gio/modules/libdconfsettings.so:dconf-gsettings-backend" \
+                 "$multiarch/ossl-modules/legacy.so:openssl-provider-legacy" \
+                 "/usr/share/icons/Adwaita/index.theme:adwaita-icon-theme" \
+                 "/usr/share/icons/hicolor/index.theme:hicolor-icon-theme"; do
+            [[ -f ${f%%:*} ]] || problem "${f%%:*}: ${f##*:}"
+        done
+        if (( ${#PROBLEMS[@]} > before )); then
+            hints+=("For the AppImage:  sudo apt install patchelf squashfs-tools binutils libglib2.0-bin curl librsvg2-common dconf-gsettings-backend openssl-provider-legacy adwaita-icon-theme")
+            lib_problems=1
+        fi
+    else
+        problem "dpkg-query: build the AppImage on Debian 13, as the release workflow does (for example in a debian:trixie container); it records the Debian package behind every bundled file"
     fi
 fi
 if (( lib_problems )); then report_problems "${hints[@]}"; else report_problems; fi
@@ -267,6 +298,10 @@ if (( ARCH_PKG )); then
     mv "${pkgs[0]}" "$out"
     [[ ! -f ${pkgs[0]}.sig ]] || mv "${pkgs[0]}.sig" "$out.sig"
     info "wrote $out"
+fi
+
+if (( APPIMAGE )); then
+    build-aux/appimage/build-appimage.sh "$BIN" "dist/transom-linux-$(uname -m).AppImage"
 fi
 
 if (( packaging == 0 )); then
