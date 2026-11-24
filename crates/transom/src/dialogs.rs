@@ -137,9 +137,10 @@ pub fn credentials(
         .text(domain.unwrap_or_default())
         .build();
     let pass = adw::PasswordEntryRow::builder().title("Password").build();
+    // Storing a password is opt-in.
     let remember = adw::SwitchRow::builder()
         .title("Remember Password")
-        .active(can_remember)
+        .active(false)
         .sensitive(can_remember)
         .build();
     group.add(&user);

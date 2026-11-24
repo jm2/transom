@@ -76,7 +76,9 @@ impl MainWindow {
             .description("Add a connection, import an .rdp file, or type an address above")
             .child(&empty_add)
             .build();
-        let list_stack = gtk::Stack::new();
+        // Not homogeneous: the list card hugs its rows instead of taking the empty
+        // page's height.
+        let list_stack = gtk::Stack::builder().vhomogeneous(false).build();
         list_stack.add_named(&list, Some("list"));
         list_stack.add_named(&empty, Some("empty"));
         let column = gtk::Box::new(gtk::Orientation::Vertical, 18);
