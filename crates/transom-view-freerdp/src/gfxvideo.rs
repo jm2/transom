@@ -585,7 +585,24 @@ unsafe extern "C" fn surface_command(
                             "many video rectangles; flattening"
                         );
                         h.flatten(gfx, id);
-                        h.read_back(gfx, id, &rects);
+                        // Converting each rectangle repeats the work where they
+                        // overlap (FreeRDP accepts any number of copies of the whole
+                        // surface). An encoder's rectangles don't overlap much: past
+                        // twice the surface, skip this frame's pixels instead (the
+                        // decoder keeps its state; nothing outside the mask is drawn).
+                        let area: u64 = rects
+                            .iter()
+                            .map(|r| u64::from(r.width) * u64::from(r.height))
+                            .sum();
+                        if area <= 2 * u64::from(sw) * u64::from(sh) {
+                            h.read_back(gfx, id, &rects);
+                        } else {
+                            tracing::debug!(
+                                surface = id,
+                                rects = n,
+                                "video rectangles overlap; frame skipped"
+                            );
+                        }
                     } else {
                         for r in &rects {
                             s.region.union_rect(*r);

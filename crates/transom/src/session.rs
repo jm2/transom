@@ -192,13 +192,19 @@ impl Session {
         });
 
         let weak = Rc::downgrade(self);
-        self.view.connect_notice(|view, text| {
-            // The window's toast overlay wraps every session.
+        let notice_weak = weak.clone();
+        self.view.connect_notice(move |view, text| {
+            let Some(s) = notice_weak.upgrade() else {
+                return;
+            };
+            // The window's toast overlay wraps every session, so name this one: the
+            // notice may arrive while another tab is selected.
             if let Some(toasts) = view
                 .ancestor(adw::ToastOverlay::static_type())
                 .and_downcast::<adw::ToastOverlay>()
             {
-                let toast = adw::Toast::new(&glib::markup_escape_text(text));
+                let text = format!("{}: {text}", s.profile.borrow().display_name());
+                let toast = adw::Toast::new(&glib::markup_escape_text(&text));
                 toast.set_timeout(0); // stays until dismissed
                 toasts.add_toast(toast);
             }
