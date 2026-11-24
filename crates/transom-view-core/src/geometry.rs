@@ -725,5 +725,4 @@ mod tests {
         assert!(out.iter().all(|&s| s == WHEEL_NOTCH as i16));
         assert_eq!(w.push(-1e20).len(), 1000);
     }
-
 }
