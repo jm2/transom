@@ -316,9 +316,18 @@ impl Session {
         if self.stage.take().is_none() {
             return;
         }
+        // Take keyboard focus only from the connecting page (or from nowhere): while
+        // waiting, the user may have moved it to the window controls (Ctrl+Alt+Home)
+        // or to another tab.
+        let focus = self.view.root().and_then(|r| r.focus());
+        let ours = focus.as_ref().is_none_or(|f| {
+            f == self.overlay.upcast_ref::<gtk::Widget>() || f.is_ancestor(&self.overlay)
+        });
         self.set_loading(false);
         self.overlay.set_visible(false);
-        self.view.grab_focus();
+        if ours {
+            self.view.grab_focus();
+        }
     }
 
     fn set_stage(&self, text: &str) {

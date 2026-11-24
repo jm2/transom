@@ -306,7 +306,8 @@ fn combo<T: PartialEq + Copy>(title: &str, choices: &[(&str, T)], current: T) ->
 /// field can stand in for the other: a connection without a name is listed by its
 /// address, and with Host empty a Name that reads as an address (`host`,
 /// `host:port`, `[v6]:port`; no spaces) is the host, leaving the name empty. A port
-/// typed with the address overrides `port`. `None`: there is no host.
+/// typed with the address overrides `port`. `None`: there is no host, or the port
+/// typed is 0 (the Port row allows 1–65535).
 fn name_and_host(name: &str, host: &str, port: u16) -> Option<(String, String, u16)> {
     let name = name.trim();
     let (name, address) = match host.trim() {
@@ -315,7 +316,7 @@ fn name_and_host(name: &str, host: &str, port: u16) -> Option<(String, String, u
         h => (name, h),
     };
     let (host, typed) = split_host_port(address)?;
-    (!host.is_empty()).then(|| (name.to_string(), host, typed.unwrap_or(port)))
+    (!host.is_empty() && typed != Some(0)).then(|| (name.to_string(), host, typed.unwrap_or(port)))
 }
 
 /// Edit (or create) a profile.
@@ -605,5 +606,21 @@ mod tests {
         assert_eq!(nh("Office PC", ""), None);
         assert_eq!(nh("", "pc.example:port"), None);
         assert_eq!(nh("", "[]"), None);
+    }
+
+    #[test]
+    fn port_zero_is_not_a_port() {
+        assert_eq!(nh("Lab", "pc.example:0"), None);
+        assert_eq!(nh("pc.example:0", ""), None);
+        assert_eq!(nh("[fe80::1]:0", ""), None);
+        // A typed port still overrides the Port row; without one, the row's value.
+        assert_eq!(
+            name_and_host("", "pc.example:1", 3390).map(|r| r.2),
+            Some(1)
+        );
+        assert_eq!(
+            name_and_host("", "pc.example", 3390).map(|r| r.2),
+            Some(3390)
+        );
     }
 }
