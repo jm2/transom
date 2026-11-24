@@ -1,11 +1,8 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Transom — macOS build and packaging: dist/Transom.app, and with --dmg dist/Transom.dmg.
-#
-# Uses Homebrew's GTK stack, like Tributary and Balun (Apple silicon):
-#   brew install gtk4 libadwaita freerdp ffmpeg adwaita-icon-theme pkg-config llvm create-dmg
-#
-#   scripts/build-macos.sh [--dmg] [--no-build]
+# Transom — macOS build and packaging helper (dist/Transom.app, optional .dmg), with the
+# flags of Tributary's and Balun's build-macos.sh. `scripts/build-macos.sh --help`
+# lists them.
 #
 # The bundle is relocatable: every non-system dylib is copied into
 # Contents/Frameworks and referenced as @executable_path/../Frameworks/…; a small
@@ -14,29 +11,131 @@
 # signing is ad hoc (no Developer ID or notarisation yet, as in the sibling apps).
 set -euo pipefail
 cd "$(dirname "$0")/.."
-DMG=0; BUILD=1
+. scripts/lib/build.sh
+
+FORMULAE="gtk4 libadwaita freerdp ffmpeg adwaita-icon-theme pkg-config llvm create-dmg"
+usage() {
+    cat <<EOF
+Transom — macOS build helper (.app bundle, optional .dmg).
+
+Usage:
+  scripts/build-macos.sh [options]
+
+With no options, checks the build dependencies, builds the release binary with
+Cargo's locked dependency graph, and assembles the relocatable, ad-hoc-signed
+dist/Transom.app. Uses Homebrew's GTK stack (Apple silicon):
+  brew install $FORMULAE
+
+Launch:
+  --run         Build the release binary, then run it in this terminal with
+                Homebrew's libraries. Skips the .app and .dmg; cannot be combined
+                with a quick-exit or packaging mode.
+
+Quick-exit modes (choose at most one):
+  --fmt         Run cargo fmt on the workspace. Needs only Cargo.
+  --check       Check every workspace target.
+  --clippy      Clippy with warnings denied: every workspace target in the debug
+                profile, then the release profile.
+  --coverage    Print a workspace coverage summary. Needs cargo-llvm-cov
+                (cargo install --locked cargo-llvm-cov --version 0.8.7).
+
+Packaging:
+  --dmg         After the bundle, create dist/Transom.dmg with create-dmg.
+  --no-build    Bundle the binary already built for the target (CI builds it
+                in an earlier step).
+
+Other:
+  -h, --help    Show this help and exit.
+
+CARGO_BUILD_TARGET selects the target (default aarch64-apple-darwin). The helper
+installs nothing: a missing formula or tool stops it before any build work, with
+the command that installs it. Cargo may fetch the locked crates.
+EOF
+}
+usage_error() { echo "build-macos: $*" >&2; usage >&2; exit 2; }
+fail() { echo "build-macos: $*" >&2; exit 1; }
+
+DMG=0 BUILD=1 FMT=0 CHECK=0 CLIPPY=0 COVERAGE=0 RUN=0
 for a in "$@"; do
     case $a in
+        -h|--help) usage; exit 0 ;;
         --dmg) DMG=1 ;;
         --no-build) BUILD=0 ;;
-        *) echo "usage: $0 [--dmg] [--no-build]" >&2; exit 2 ;;
+        --fmt) FMT=1 ;;
+        --check) CHECK=1 ;;
+        --clippy) CLIPPY=1 ;;
+        --coverage) COVERAGE=1 ;;
+        --run) RUN=1 ;;
+        *) usage_error "unknown option: $a" ;;
     esac
 done
-info() { echo "==> $*"; }
-fail() { echo "build-macos: $*" >&2; exit 1; }
-[[ $(uname) == Darwin ]] || fail "run this on macOS"
-for t in brew otool install_name_tool codesign iconutil realpath; do
-    command -v "$t" >/dev/null || fail "$t not found"
-done
+quick=$((FMT + CHECK + CLIPPY + COVERAGE))
+packaging=$((DMG + 1 - BUILD))
+(( quick <= 1 )) || usage_error "choose at most one of --fmt, --check, --clippy and --coverage"
+(( quick == 0 || packaging == 0 )) || usage_error "a quick-exit mode can't be combined with --dmg or --no-build"
+(( RUN == 0 || quick + packaging == 0 )) || usage_error "--run can't be combined with other modes"
+
+if (( FMT )); then
+    command -v cargo >/dev/null || fail "cargo not found: install Rust with rustup, https://rustup.rs"
+    cargo fmt --version >/dev/null 2>&1 || fail "cargo fmt not found: rustup component add rustfmt"
+    info "cargo fmt --all"
+    exec cargo fmt --all
+fi
+
+[[ $(uname) == Darwin ]] || fail "run this on macOS (scripts/build-linux.sh, scripts/build-windows.ps1)"
+TARGET=${CARGO_BUILD_TARGET:-aarch64-apple-darwin}
+BUNDLE=$(( quick == 0 && RUN == 0 ))
+
+# ---- dependency checks (everything first, then one report) ----
+command -v brew >/dev/null || fail "Homebrew not found: install it from https://brew.sh, then: brew install $FORMULAE"
 BREW=$(brew --prefix)
+# Homebrew's own pkg-config and libclang, whatever else is on PATH.
+export PKG_CONFIG="$BREW/bin/pkg-config"
+export PKG_CONFIG_PATH="$BREW/lib/pkgconfig"
+export LIBCLANG_PATH="$BREW/opt/llvm/lib"   # bindgen
+(( BUILD )) && check_rust "$TARGET"
+if [[ -x $PKG_CONFIG ]]; then
+    check_modules "$PKG_CONFIG" "gtk4 4.16" "libadwaita-1 1.6" "freerdp3 3.15" \
+        "freerdp-client3 3.15" "winpr3 3.15"
+else
+    problem "pkg-config: brew install pkg-config"
+fi
+[[ -e $LIBCLANG_PATH/libclang.dylib ]] || problem "libclang, for bindgen: brew install llvm"
+if (( BUNDLE )); then
+    for t in otool install_name_tool codesign iconutil; do
+        check_cmd "$t" "Xcode's command line tools: xcode-select --install"
+    done
+    check_cmd realpath "macOS 13 or later, or brew install coreutils"
+    [[ -x $BREW/bin/gdk-pixbuf-query-loaders ]] || problem "gdk-pixbuf-query-loaders: brew install gdk-pixbuf"
+    [[ -f $BREW/share/icons/Adwaita/index.theme ]] || problem "the Adwaita icon theme: brew install adwaita-icon-theme"
+    check_cmd glib-compile-schemas "brew install glib"
+fi
+(( DMG )) && check_cmd create-dmg "brew install create-dmg"
+(( CLIPPY )) && check_component clippy clippy
+(( COVERAGE )) && check_tool_version cargo-llvm-cov 0.8.7 "cargo install --locked cargo-llvm-cov --version 0.8.7"
+report_problems "Homebrew installs the libraries and tools:  brew install $FORMULAE"
+
+# ---- quick-exit modes, --run ----
+if (( CHECK )); then
+    info "cargo check --workspace --all-targets --target $TARGET"
+    exec cargo check --workspace --all-targets --locked --target "$TARGET"
+fi
+if (( CLIPPY )); then
+    info "cargo clippy --workspace --all-targets --target $TARGET (debug)"
+    cargo clippy --workspace --all-targets --locked --target "$TARGET" -- -D warnings
+    info "cargo clippy --workspace --release --target $TARGET"
+    exec cargo clippy --workspace --release --locked --target "$TARGET" -- -D warnings
+fi
+if (( COVERAGE )); then
+    info "cargo llvm-cov --workspace --all-targets --target $TARGET"
+    exec cargo llvm-cov --workspace --all-targets --locked --target "$TARGET" --summary-only
+fi
+
 # Scratch space; $work/binaries lists each bundled binary's Homebrew source and its
 # place in the bundle (for BUNDLED-PACKAGES.txt).
 work=$(mktemp -d "${TMPDIR:-/var/tmp}/transom-macos.XXXXXX")
 trap 'rm -rf "$work"' EXIT
 : > "$work/binaries"
-export PKG_CONFIG_PATH="$BREW/lib/pkgconfig"
-export LIBCLANG_PATH="$BREW/opt/llvm/lib"   # bindgen
-TARGET=${CARGO_BUILD_TARGET:-aarch64-apple-darwin}
 VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 
 if (( BUILD )); then
@@ -45,6 +144,12 @@ if (( BUILD )); then
 fi
 BIN_SRC="target/$TARGET/release/transom"
 [[ -x $BIN_SRC ]] || fail "missing $BIN_SRC"
+if (( RUN )); then
+    # Linked against Homebrew's libraries, which find their own data: runs as is.
+    info "running $BIN_SRC"
+    rm -rf "$work"   # exec skips the EXIT trap
+    exec "$BIN_SRC"
+fi
 
 APP=dist/Transom.app
 C=$APP/Contents
