@@ -4,7 +4,8 @@
 # window after a delay. Uses a throwaway config dir; the grd test server can be
 # reached at localhost:13389 (scripts/test-servers.sh up).
 #
-#   scripts/app-shot.sh NAME SCALE SECONDS [--seed-trust] [--seed-profile] [-- transom args...]
+#   scripts/app-shot.sh NAME SCALE SECONDS [--seed-trust] [--seed-profile]
+#                       [--trust HOST:PORT SHA256] [-- transom args...]
 #   -> ${TMPDIR:-/var/tmp}/transom-test/app-NAME.png
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -16,10 +17,12 @@ fp=$(podman logs transom-grd 2>/dev/null | sed -n 's/^TLS fingerprint: //p' | ta
 while [[ $# -gt 0 && $1 != "--" ]]; do
     case $1 in
         --seed-trust) printf '[hosts]\n"localhost:13389" = "%s"\n' "$fp" > "$CFG/transom/known-hosts.toml" ;;
+        --trust) # HOST:PORT SHA256 (e.g. a Windows test VM)
+            printf '[hosts]\n"%s" = "%s"\n' "$2" "$3" > "$CFG/transom/known-hosts.toml"; shift 2 ;;
         --seed-multimon)
             printf 'name = "Multi"\nhost = "localhost"\nport = 13389\nusername = "transom"\nmultimon = true\n' > "$CFG/transom/profiles/multi.toml" ;;
         --seed-profile)
-            for n in "GNOME Test Server:localhost:13389:transom" "Office Desktop:pc.corp.example:3389:jm" "Lab Windows 11:192.168.50.20:3389:admin"; do
+            for n in "GNOME Test Server:localhost:13389:transom" "Office Desktop:pc.corp.example:3389:alex" "Lab Windows 11:192.168.50.20:3389:admin"; do
                 IFS=: read -r name host port user <<<"$n"
                 id=$(echo "$name" | tr 'A-Z ' 'a-z-')
                 printf 'name = "%s"\nhost = "%s"\nport = %s\nusername = "%s"\n' "$name" "$host" "$port" "$user" > "$CFG/transom/profiles/$id.toml"
