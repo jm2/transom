@@ -151,9 +151,13 @@ impl Session {
                 failed,
                 move |entered| match entered {
                     Some(c) => {
-                        // Only the latest answer counts: an earlier "remember" must
-                        // not save a password typed later with it turned off.
-                        *s2.pending_remember.borrow_mut() = c.remember.then(|| c.password.clone());
+                        // Only the latest server answer counts: an earlier "remember"
+                        // must not save a password typed later with it turned off. A
+                        // gateway answer (never remembered) leaves it alone.
+                        if !gateway {
+                            *s2.pending_remember.borrow_mut() =
+                                c.remember.then(|| c.password.clone());
+                        }
                         let mut p = s2.profile.borrow_mut();
                         if gateway {
                             if let Some(g) = p.gateway.as_mut() {
