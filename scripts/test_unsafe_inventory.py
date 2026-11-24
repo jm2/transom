@@ -43,7 +43,10 @@ unsafe impl Sync for S {}
 
 class SitesTest(unittest.TestCase):
     def setUp(self):
-        fd, name = tempfile.mkstemp(suffix=".rs", dir=os.environ.get("TMPDIR") or "/var/tmp")
+        # $TMPDIR, else /var/tmp (never the /tmp tmpfs), else the platform's default
+        # (Windows has neither).
+        scratch = os.environ.get("TMPDIR") or ("/var/tmp" if os.path.isdir("/var/tmp") else None)
+        fd, name = tempfile.mkstemp(suffix=".rs", dir=scratch)
         os.close(fd)
         self.path = Path(name)
         self.path.write_text(SOURCE)

@@ -10,7 +10,7 @@ only when Transom is rebuilt and released (SECURITY.md). This script compares wh
 those sources offer now with build-aux/packaging/bundled-versions.txt, the versions
 recorded at the last release:
 
-  scripts/bundled-versions.py --check   # print the changes (Markdown); exit 1 if any
+  scripts/bundled-versions.py --check   # print the changes (Markdown); exit 3 if any
   scripts/bundled-versions.py --write   # record the current versions (at a release)
 
 Exit status 2: a source couldn't be queried, or didn't list every package (no report
@@ -229,7 +229,8 @@ def main():
     print("|---|---|---|---|")
     for s, p, was, ver in changes:
         print(f"| `{p}` | {SOURCE_NAMES[s]} | {was} | {ver} |")
-    return 1
+    # Not 1: that is what Python exits with when the script itself fails.
+    return 3
 
 
 if __name__ == "__main__":

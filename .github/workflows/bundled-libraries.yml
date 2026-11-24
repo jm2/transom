@@ -38,10 +38,12 @@ jobs:
           status=0
           python3 scripts/bundled-versions.py --check > report.md || status=$?
           cat report.md
+          # 0: no changes; 3: changes; anything else (2: a source couldn't be
+          # queried, 1: the script failed) fails the job and leaves the issue alone.
           case $status in
             0) exit 0 ;;
-            1) ;;
-            *) echo "a source couldn't be queried; no issue updated" >&2; exit 1 ;;
+            3) ;;
+            *) echo "bundled-versions.py exited $status; no issue updated" >&2; exit 1 ;;
           esac
           {
             echo "Libraries in Transom's self-contained packages changed since the last release."
