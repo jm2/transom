@@ -183,6 +183,11 @@ pub fn dib_to_image(d: &[u8]) -> Option<Image> {
     if bpp <= 8 {
         return None; // palettes: not produced by modern apps
     }
+    // A mask with a gap (0x8000_0001) would overflow the channel scaling below.
+    let contiguous = |m: u32| m == 0 || (m >> m.trailing_zeros()).wrapping_add(1).is_power_of_two();
+    if ![rmask, gmask, bmask, amask].into_iter().all(contiguous) {
+        return None;
+    }
     offset += colors_used * 4;
     let bytes_pp = match bpp {
         24 => 3,
@@ -198,6 +203,7 @@ pub fn dib_to_image(d: &[u8]) -> Option<Image> {
         let shift = mask.trailing_zeros();
         let bits = (mask >> shift).count_ones();
         let v = (px & mask) >> shift;
+        // Masks must be contiguous (checked below); `v` then fits in `bits` bits.
         if bits >= 8 {
             (v >> (bits - 8)) as u8
         } else {
@@ -295,14 +301,53 @@ pub fn sanitize_relative_path(raw: &str) -> Option<String> {
         .split(['\\', '/'])
         .filter(|p| !p.is_empty() && *p != "." && *p != "..")
         .collect();
-    if parts.is_empty()
-        || parts
-            .iter()
-            .any(|p| p.contains(':') || p.chars().any(|c| c.is_control()))
-    {
+    if parts.is_empty() || parts.iter().any(|p| !safe_component(p)) {
         return None;
     }
     Some(parts.join("/"))
+}
+
+/// One path component from the remote: no drive or stream colon, no control or bidi
+/// override characters (which can disguise `exe.txt` as `txt.exe`), and not a Windows
+/// device name (`CON`, `COM1.txt`, …), which opens a device instead of a file there.
+fn safe_component(p: &str) -> bool {
+    const BIDI: &[char] = &[
+        '\u{200E}', '\u{200F}', '\u{202A}', '\u{202B}', '\u{202C}', '\u{202D}', '\u{202E}',
+        '\u{2066}', '\u{2067}', '\u{2068}', '\u{2069}',
+    ];
+    if p.contains(':') || p.chars().any(|c| c.is_control() || BIDI.contains(&c)) {
+        return false;
+    }
+    let stem = p
+        .split('.')
+        .next()
+        .unwrap_or(p)
+        .trim_end()
+        .to_ascii_uppercase();
+    let device = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || ((stem.starts_with("COM") || stem.starts_with("LPT"))
+            && stem.len() == 4
+            && stem.as_bytes()[3].is_ascii_digit());
+    !device
+}
+
+/// Width and height from a PNG's IHDR, if `data` starts like a PNG.
+pub fn png_dimensions(data: &[u8]) -> Option<(u32, u32)> {
+    const SIG: &[u8] = b"\x89PNG\r\n\x1a\n";
+    if !data.starts_with(SIG) || data.get(12..16)? != b"IHDR" {
+        return None;
+    }
+    let be = |at: usize| -> Option<u32> {
+        Some(u32::from_be_bytes(data.get(at..at + 4)?.try_into().ok()?))
+    };
+    Some((be(16)?, be(20)?))
+}
+
+/// Whether a PNG from the remote is small enough to put on the local clipboard
+/// (applications that paste it decode it; Transom doesn't).
+pub fn png_acceptable(data: &[u8]) -> bool {
+    png_dimensions(data)
+        .is_some_and(|(w, h)| w > 0 && h > 0 && u64::from(w) * u64::from(h) <= MAX_IMAGE_PIXELS)
 }
 
 /// Encode a `FileGroupDescriptorW` (MS-RDPECLIP 2.2.5.2.3.1).
@@ -333,6 +378,18 @@ pub fn encode_file_group(files: &[FileDescriptor]) -> Vec<u8> {
 
 /// Decode a `FileGroupDescriptorW`. Entries with unsafe names are dropped.
 pub fn decode_file_group(d: &[u8]) -> Option<Vec<FileDescriptor>> {
+    Some(
+        decode_file_group_indexed(d)?
+            .into_iter()
+            .map(|(_, f)| f)
+            .collect(),
+    )
+}
+
+/// [`decode_file_group`], with each entry's position in the remote's list: entries
+/// with unsafe names are dropped, and file contents must still be requested by the
+/// remote's own index.
+pub fn decode_file_group_indexed(d: &[u8]) -> Option<Vec<(u32, FileDescriptor)>> {
     let count = u32le(d, 0)? as usize;
     if count > MAX_FILES || d.len() < 4 + count * FILEDESCRIPTORW_LEN {
         return None;
@@ -359,11 +416,14 @@ pub fn decode_file_group(d: &[u8]) -> Option<Vec<FileDescriptor>> {
             .take_while(|&u| u != 0)
             .collect();
         if let Some(path) = sanitize_relative_path(&String::from_utf16_lossy(&units)) {
-            out.push(FileDescriptor {
-                path,
-                size,
-                is_dir: attrs & FILE_ATTRIBUTE_DIRECTORY != 0,
-            });
+            out.push((
+                i as u32,
+                FileDescriptor {
+                    path,
+                    size,
+                    is_dir: attrs & FILE_ATTRIBUTE_DIRECTORY != 0,
+                },
+            ));
         }
     }
     Some(out)
@@ -504,5 +564,63 @@ mod tests {
         fn text_round_trip_any(s in "[^\r\0]*") {
             prop_assert_eq!(decode_text(&encode_text(&s)), s);
         }
+    }
+
+    #[test]
+    fn remote_names_that_disguise_or_open_devices_are_refused() {
+        assert_eq!(
+            sanitize_relative_path("dir/report.txt"),
+            Some("dir/report.txt".into())
+        );
+        for bad in [
+            "CON",
+            "dir/nul.txt",
+            "COM1.log",
+            "lpt9",
+            "a\u{202E}txt.exe",
+            "x:y",
+        ] {
+            assert_eq!(sanitize_relative_path(bad), None, "{bad:?}");
+        }
+        assert!(sanitize_relative_path("COM10").is_some()); // only COM1–COM9 are devices
+        assert!(sanitize_relative_path("console.txt").is_some());
+    }
+
+    #[test]
+    fn dib_masks_with_gaps_are_rejected_not_overflowed() {
+        // 1x1, 32 bpp, BI_BITFIELDS with a red mask that has a gap.
+        let mut d = Vec::new();
+        for v in [40u32, 1, 1] {
+            d.extend_from_slice(&v.to_le_bytes());
+        }
+        d[8..12].copy_from_slice(&1u32.to_le_bytes());
+        d.truncate(8);
+        d.extend_from_slice(&1i32.to_le_bytes()); // height
+        d.extend_from_slice(&1u16.to_le_bytes()); // planes
+        d.extend_from_slice(&32u16.to_le_bytes()); // bpp
+        d.extend_from_slice(&3u32.to_le_bytes()); // BI_BITFIELDS
+        d.extend_from_slice(&[0; 20]);
+        for m in [0x8000_0001u32, 0x0000_FF00, 0x0000_00FF] {
+            d.extend_from_slice(&m.to_le_bytes());
+        }
+        d.extend_from_slice(&0xFFFF_FFFFu32.to_le_bytes()); // the pixel
+        assert!(dib_to_image(&d).is_none());
+        // The same image with a contiguous red mask decodes (so the header is valid).
+        d[40..44].copy_from_slice(&0x00FF_0000u32.to_le_bytes());
+        assert!(dib_to_image(&d).is_some());
+    }
+
+    #[test]
+    fn png_size_is_read_from_the_header() {
+        let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR".to_vec();
+        png.extend_from_slice(&640u32.to_be_bytes());
+        png.extend_from_slice(&480u32.to_be_bytes());
+        assert_eq!(png_dimensions(&png), Some((640, 480)));
+        assert!(png_acceptable(&png));
+        let mut bomb = png.clone();
+        bomb[16..20].copy_from_slice(&100_000u32.to_be_bytes());
+        bomb[20..24].copy_from_slice(&100_000u32.to_be_bytes());
+        assert!(!png_acceptable(&bomb));
+        assert!(!png_acceptable(b"GIF89a"));
     }
 }

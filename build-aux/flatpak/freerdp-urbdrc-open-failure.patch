@@ -1,0 +1,19 @@
+From: Transom contributors
+Subject: [PATCH] urbdrc: don't crash when a USB device can't be opened
+
+udev_init() frees a half-initialised device on failure (for example when
+libusb_open() returns LIBUSB_ERROR_ACCESS), before request_queue exists.
+udev_free() then calls ArrayList_Count(NULL) and the client crashes.
+
+---
+--- a/channels/urbdrc/client/libusb/libusb_udevice.c
++++ b/channels/urbdrc/client/libusb/libusb_udevice.c
+@@ -1787,7 +1787,7 @@
+ 		log_libusb_result(urbdrc->log, WLOG_ERROR, "libusb_reset_device", rc);
+ 	}
+ 
+-	while (ArrayList_Count(udev->request_queue) > 0)
++	while (udev->request_queue && (ArrayList_Count(udev->request_queue) > 0))
+ 	{
+ 		/* HACK: We need to wait until the cancel transfer has been processed by
+ 		 * poll_libusb_events

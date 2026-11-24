@@ -71,9 +71,11 @@ public static class SCard {
         }
         'usb' {
             $vid, $pid_ = $Id.ToUpper().Split(':')
-            $devs = @(Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue |
-                Where-Object { $_.InstanceId -like "USB\VID_$vid&PID_$pid_*" } |
-                ForEach-Object { @{ id = $_.InstanceId; name = $_.FriendlyName; status = "$($_.Status)" } })
+            # Win32_PnPEntity with a timeout: a device that is still installing can stall
+            # PnP queries, and the probe must still answer.
+            $devs = @(Get-CimInstance Win32_PnPEntity -OperationTimeoutSec 20 -ErrorAction SilentlyContinue |
+                Where-Object { $_.PNPDeviceID -like "USB\VID_$vid&PID_$pid_*" } |
+                ForEach-Object { @{ id = $_.PNPDeviceID; name = $_.Name; status = "$($_.Status)"; problem = $_.ConfigManagerErrorCode } })
             Done @{ t = 'usb'; devices = $devs }
         }
         default { throw "unknown action $Action" }

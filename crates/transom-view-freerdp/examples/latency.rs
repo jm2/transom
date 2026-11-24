@@ -22,6 +22,7 @@ use transom_view_core::trust::normalize_fingerprint;
 use transom_view_freerdp::FreeRdpEngine;
 
 /// CLOCK_MONOTONIC seconds (same clock as the probe inside the container).
+#[cfg(unix)]
 fn mono() -> f64 {
     let mut ts = libc::timespec {
         tv_sec: 0,
@@ -30,6 +31,14 @@ fn mono() -> f64 {
     // SAFETY: valid out-pointer.
     unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) };
     ts.tv_sec as f64 + ts.tv_nsec as f64 * 1e-9
+}
+
+/// The latency check runs against Linux containers only; elsewhere the example
+/// still builds, with a clock the probe doesn't share.
+#[cfg(not(unix))]
+fn mono() -> f64 {
+    static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    START.get_or_init(Instant::now).elapsed().as_secs_f64()
 }
 
 fn main() -> ExitCode {

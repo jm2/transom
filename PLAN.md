@@ -160,7 +160,8 @@ Each phase ends with its Definition of Done (DoD) demonstrated and logged in §1
 ### Phase 0 — Spikes and decisions (≤1 week)
 - [x] Pick the FreeRDP 3 binding strategy: an existing Rust binding (e.g. the one RDW uses)
       vs. `bindgen` over the system FreeRDP 3. Write up the choice in `docs/decisions/0001-bindings.md`.
-- [ ] Minimal binary: connect to Windows (antec-win) with FreeRDP, dump one frame to PNG.
+- [x] Minimal binary: connect to Windows (antec-win) with FreeRDP, dump one frame to PNG
+      (`transom-view-freerdp` example `spike`; Windows 11/Server 2025 VMs and grd).
 - [x] Confirm GTK version floor (target ≥ 4.16 for memory-texture updates + cursor callback);
       document fallbacks if a distro is older.
 - [x] Freeze the engine trait v0 (`transom-view-core::engine`).
@@ -168,7 +169,7 @@ Each phase ends with its Definition of Done (DoD) demonstrated and logged in §1
 
 ### Phase 1 — Widget MVP with correct HiDPI (2–3 weeks)
 - [x] `transom-view-core::geometry` with property tests (§3 items 1, 2, 5, 6).
-- [ ] FreeRDP backend: connect, NLA, TOFU cert (system-CA validation first; TOFU fallback
+- [x] FreeRDP backend: connect, NLA, TOFU cert (system-CA validation first; TOFU fallback
       prompt), GFX negotiation, frames, pointer, keyboard (scancode via XKB keycode→scancode),
       mouse, wheel.
 - [x] `TransomView` rendering per §3–§4 with damage-region uploads (tiled, ADR 0004).
@@ -223,6 +224,9 @@ It never fails the connection. Probe what the server announced, not what we aske
 for, and test refusals as well as success.
 - [ ] Capability reporting: per-session list of the redirections the server accepted or
       refused (static/dynamic channel open results), shown in the session info popover.
+      *Next step:* record which FreeRDP channel events fire when a server accepts or
+      refuses each channel, using a containerised client (as devices-check.sh) so no
+      real local device is involved.
 - [x] Drives (MS-RDPEFS): user-chosen folders via the file chooser (portal-friendly);
       `scripts/devices-check.sh` reads and writes `\\tsclient\transom` on Windows 11, and a
       server-side refusal leaves the session and other devices working. Read-only: not
@@ -245,6 +249,10 @@ for, and test refusals as well as success.
       refusal, fall back to the class channel above when one fits (drive, smartcard,
       camera, audio). Test: a virtual USB device (dummy_hcd + configfs gadget, needs root
       once) or a spare stick, against both VMs.
+      **Partly done — Linux (2026-11-23):** `scripts/usb-check.sh` with a real FT232R against
+      the Windows 11 VM (redirect, return, refusal). Windows 11 needs the PnP policy
+      explicitly Disabled (docs/usb.md). Still open: device lists on macOS and Windows,
+      and a class re-check for devices plugged in mid-session.
 
 ### Phase 5 — Library packaging for other consumers (1–2 weeks)
 - [x] `transom-view-capi`: stable C ABI, GObject type `TransomView`, GIR + VAPI generation,
@@ -285,7 +293,8 @@ Integration tests against a headless grd in a VM are optional, behind `--feature
 
 - Run `scripts/verify.sh` (fmt, clippy -D warnings, tests, cargo-deny) before every commit;
   create it in Phase 0.
-- `unsafe` lives **only** in `transom-view-freerdp` (FFI) and `transom-view-capi`. Every `unsafe` block
+- `unsafe` lives **only** in `transom-view-freerdp` (FFI), `transom-view-capi` and
+  `transom-macos` (Objective-C: Apple Events for links). Every `unsafe` block
   gets a `// SAFETY:` comment.
 - No new dependencies without a one-line justification in the commit message. Prefer
   well-maintained crates; no network access at runtime except the RDP connection itself.
@@ -323,3 +332,4 @@ Integration tests against a headless grd in a VM are optional, behind `--feature
 | 2026-11-21 | 1d | 3–6 | Licences: transom-view* Apache-2.0, app GPL-3.0-or-later. **Phase 3 done (non-Windows):** clipboard text/HTML/images/files (ADR 0005), audio out + mic, grd remote login with Server Redirection (systemd+GDM container), multi-monitor (per-monitor scale, follower views). Input verified end to end (engine + widget path). H.264 advertised when a decoder works. **Phase 4:** Kerberos SSO (KDC container). **Phase 5 done:** C API, GIR/typelib/VAPI, Python + Vala samples. **Phase 6:** AT-SPI a11y audit + Ctrl+Alt+Home focus escape; latency 26–30 ms median (loopback). Packaging: Flatpak (GNOME 51, smoke-tested), RPM + PKGBUILD (built in clean containers). Fixed: GIO mangling Microsoft rdp:// links, redirect false positive. Known server issues in docs/known-issues.md. | **VM/hardware:** Windows VM (SVM) for all Windows halves, RD Gateway, RemoteApp; camera (needs H.264 encode + GPU decode on grd, or Windows); dmabuf spike (hardware H.264); macOS/Windows builds (seams in ADR 0002: secrets, Windows keycodes). Optional: IronRDP, smartcard. |
 | 2026-11-22 | 1e | 4 | **Windows VMs** (Win11 25H2, Server 2025; KVM, rootless QEMU): view/resize/multimon pixel-exact, input, clipboard incl. files, audio, latency (31 ms) all pass against both; RD Gateway. **Phase 4 DoD met:** AD test domain + Kerberos SSO through the gateway to a domain member, desktop via Remote Credential Guard (RDPEAR), with fallbacks for FreeRDP without RDPEAR, hosts without the policy, and grd. Phase 4b (device redirection: class channels + generic USB) planned. | Zero-copy H.264 (VA-API H.264 decode now available: RX 6400 + mesa freeworld); Phase 4b; RemoteApp. |
 | 2026-11-22 | 1f | 4b/6/pkg | **Zero-copy H.264** (VA-API→dmabuf, ADR 0006; bit-exact decoder, 36–39 dB on screen, fallbacks). **Device redirection**: drives, printers, smart cards verified on Win11 + Server 2025 (`scripts/devices-check.sh`), USB picker + URBDRC (live test pending a device permission), serial known issue. **Packaging parity with Tributary/Balun**: Windows (MSYS2) zip + Inno installer *built and run inside the Win11 VM* (4 Windows build fixes), macOS .app/.dmg script, Keychain/Credential Manager, raster icons, .deb (Debian 13) / RPM / Arch built and installed in containers, release workflow, Packit, AUR. | USB live test; macOS build on real hardware; first CI run (push); refusal reporting for rdpdr devices. |
+| 2026-11-23 | 1g | 4b/pkg/sec | **USB live** (FT232R → Win11; Windows 11 needs the PnP policy set explicitly). **macOS** verified on a Mac (builds, packages, runs; .rdp/rdp:// handling via Apple Events, `transom-macos`). **CI green on all five platforms**; `main` protected (PR + CI + CodeRabbit, like Tributary/Balun). README with screenshots. **Security review** (4 independent reviewers): fixes in progress as PRs (untrusted files/links confirm, bounded parsing, clipboard, engine limits, packaging/harness). Release dry runs of every package. | Capability reporting (needs a containerised channel-event probe); v0.1.0 release. |

@@ -2,14 +2,15 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Build the system FreeRDP's version with the MS-RDPEAR channel (Remote Credential
 # Guard), which distribution builds such as Fedora's leave out, into
-# ${TMPDIR:-/var/tmp}/transom-test/freerdp-rdpear/lib64, in a throwaway Fedora
+# ${TMPDIR:-/var/tmp}/transom-test-UID/freerdp-rdpear/lib64, in a throwaway Fedora
 # container with Fedora's build dependencies. scripts/ad-check.sh uses it when present
 # (the Flatpak enables the channel itself). Same version as the system library, so the
 # examples run against it with LD_LIBRARY_PATH, unrebuilt.
 #   scripts/build-freerdp-rdpear.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."
-OUT="${TMPDIR:-/var/tmp}/transom-test/freerdp-rdpear"
+source scripts/lib/state.sh
+OUT="$STATE/freerdp-rdpear"
 ver=$(pkg-config --modversion freerdp3)
 fedora=$(rpm -E %fedora)
 work=$(mktemp -d -p "${TMPDIR:-/var/tmp}")

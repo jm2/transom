@@ -6,7 +6,7 @@
 #   scripts/test-servers.sh login-up && scripts/login-check.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."
-STATE="${TMPDIR:-/var/tmp}/transom-test"
+source scripts/lib/state.sh
 cargo build -q -p transom-view-freerdp --example logintest
 podman restart transom-grd-login >/dev/null   # fresh greeter, no existing session
 for _ in $(seq 60); do podman exec transom-grd-login test -f /run/transom/fingerprint 2>/dev/null && break; sleep 1; done

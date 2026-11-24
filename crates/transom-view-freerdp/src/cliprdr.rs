@@ -186,6 +186,9 @@ pub(crate) fn reply(state: &State, format: ClipFormat, data: Option<Vec<u8>>) {
         len = data.as_ref().map(Vec::len),
         "clipboard reply"
     );
+    // The UI caps file chunks well below this; anything that wouldn't fit the PDU's
+    // 32-bit length (with the 4-byte stream id) is answered as a failure.
+    let data = data.filter(|d| u32::try_from(d.len()).is_ok_and(|n| n <= u32::MAX - 4));
     let (flags, len, ptr) = match &data {
         Some(d) => (ffi::CB_RESPONSE_OK as u16, d.len() as u32, d.as_ptr()),
         None => (ffi::CB_RESPONSE_FAIL as u16, 0, ptr::null()),

@@ -60,8 +60,16 @@ impl AppState {
                 trust_path.display(),
                 aside.display()
             );
-            let _ = std::fs::rename(&trust_path, &aside);
-            TrustStore::load(&trust_path).expect("empty trust store")
+            match std::fs::rename(&trust_path, &aside) {
+                Ok(()) => TrustStore::load(&trust_path),
+                // Can't move it (read-only directory?): keep going with a separate,
+                // empty store rather than overwriting the original.
+                Err(_) => TrustStore::load(config.join("known-hosts.recovered.toml")),
+            }
+            .unwrap_or_else(|_| {
+                TrustStore::load(glib::user_runtime_dir().join("transom-known-hosts.toml"))
+                    .unwrap_or_else(|e| panic!("no usable trust store location: {e}"))
+            })
         });
         Self {
             profiles: ProfileStore::new(config.join("profiles")),
@@ -151,8 +159,27 @@ fn active_window(app: &adw::Application, state: &Rc<AppState>) -> Rc<MainWindow>
     })
 }
 
-thread_local! {
-    static CLI_PASSWORD: RefCell<Option<SecretString>> = const { RefCell::new(None) };
+/// See the `connect_open` handler in [`run`]: only macOS routes files through `open`.
+#[cfg(target_os = "macos")]
+const OPEN_FLAGS: gio::ApplicationFlags = gio::ApplicationFlags::HANDLES_OPEN;
+#[cfg(not(target_os = "macos"))]
+const OPEN_FLAGS: gio::ApplicationFlags = gio::ApplicationFlags::empty();
+
+/// Imports a `.rdp` file; `fallback` names it if it has no basename.
+fn open_rdp_file(
+    w: &Rc<MainWindow>,
+    file: &gio::File,
+    fallback: &str,
+    password: Option<SecretString>,
+) {
+    let name = file
+        .basename()
+        .map(|b| b.to_string_lossy().into_owned())
+        .unwrap_or_else(|| fallback.to_owned());
+    match file.load_contents(gio::Cancellable::NONE) {
+        Ok((bytes, _)) => w.open_rdp_bytes(&bytes, &name, password),
+        Err(e) => w.toast(&format!("Couldn't open {name}: {e}")),
+    }
 }
 
 pub fn run() -> glib::ExitCode {
@@ -160,8 +187,8 @@ pub fn run() -> glib::ExitCode {
         .application_id(APP_ID)
         // Command line, not HANDLES_OPEN: GIO's GFile parsing mangles Microsoft-style
         // links (rdp://full%20address=s:host:port&… becomes rdp://full%20address=s:0/),
-        // so rdp:// arguments must be read raw.
-        .flags(gio::ApplicationFlags::HANDLES_COMMAND_LINE)
+        // so rdp:// arguments must be read raw. macOS also needs HANDLES_OPEN (below).
+        .flags(gio::ApplicationFlags::HANDLES_COMMAND_LINE | OPEN_FLAGS)
         .build();
     app.add_main_option(
         "password-file",
@@ -171,23 +198,6 @@ pub fn run() -> glib::ExitCode {
         "Read the password for an address given on the command line from FILE",
         Some("FILE"),
     );
-    app.connect_handle_local_options(|_, dict| {
-        if let Some(path) = dict.lookup::<PathBuf>("password-file").ok().flatten() {
-            match std::fs::read_to_string(&path) {
-                Ok(s) => CLI_PASSWORD.with(|c| {
-                    *c.borrow_mut() = Some(SecretString::from(
-                        s.lines().next().unwrap_or("").to_string(),
-                    ))
-                }),
-                Err(e) => {
-                    eprintln!("{}: {e}", path.display());
-                    return std::ops::ControlFlow::Break(glib::ExitCode::from(2));
-                }
-            }
-        }
-        std::ops::ControlFlow::Continue(())
-    });
-
     let state: Rc<RefCell<Option<Rc<AppState>>>> = Rc::new(RefCell::new(None));
     let st = state.clone();
     app.connect_startup(move |app| {
@@ -220,30 +230,64 @@ pub fn run() -> glib::ExitCode {
         }
         let w = active_window(app, &s);
         w.window.present();
+        // --password-file belongs to this invocation only: read it here, in the primary
+        // instance (relative to the invoking process's directory), and give it to the
+        // first address or file of this command line. Never kept for later links.
+        let mut password = None;
+        if let Some(path) = cmd
+            .options_dict()
+            .lookup::<PathBuf>("password-file")
+            .ok()
+            .flatten()
+        {
+            let path = match cmd.cwd() {
+                Some(cwd) if path.is_relative() => cwd.join(path),
+                _ => path,
+            };
+            match std::fs::read_to_string(&path) {
+                Ok(text) => {
+                    password = Some(SecretString::from(
+                        text.lines().next().unwrap_or("").to_string(),
+                    ));
+                }
+                Err(e) => {
+                    w.toast(&format!("Couldn't read {}: {e}", path.display()));
+                    return glib::ExitCode::from(2);
+                }
+            }
+            if targets.is_empty() {
+                w.toast("--password-file needs an address or .rdp file to go with it");
+            }
+        }
         for t in targets {
+            let password = password.take();
             if t.to_ascii_lowercase().starts_with("rdp://") {
-                let password = CLI_PASSWORD.with(|c| c.borrow_mut().take());
-                match transom_view::core::rdpfile::RdpFile::from_uri(&t)
-                    .ok()
-                    .and_then(|f| transom_view::core::profile::Profile::from_rdp(&f))
-                {
-                    Some(p) => w.open_session(p, true, password),
-                    None => w.toast(&format!("Invalid link: {t}")),
-                }
+                open_link(&w, &t, password);
             } else {
-                let file = cmd.create_file_for_arg(&t);
-                let name = file
-                    .basename()
-                    .map(|b| b.to_string_lossy().into_owned())
-                    .unwrap_or(t.clone());
-                match file.load_contents(gio::Cancellable::NONE) {
-                    Ok((bytes, _)) => w.open_rdp_bytes(&bytes, &name),
-                    Err(e) => w.toast(&format!("Couldn't open {name}: {e}")),
-                }
+                open_rdp_file(&w, &cmd.create_file_for_arg(&t), &t, password);
             }
         }
         glib::ExitCode::SUCCESS
     });
+    // macOS delivers Finder's "Open With" (and `open file.rdp`) as an Apple Event,
+    // which GTK forwards to the open signal, never to the command line. rdp:// links
+    // (kAEGetURL) come through transom-macos instead (below).
+    #[cfg(target_os = "macos")]
+    {
+        let st = state.clone();
+        app.connect_open(move |app, files, _hint| {
+            let Some(s) = st.borrow().clone() else { return };
+            let w = active_window(app, &s);
+            w.window.present();
+            for file in files {
+                if file.has_uri_scheme("rdp") {
+                    open_link(&w, &file.uri(), None);
+                } else {
+                    open_rdp_file(&w, file, &file.uri(), None);
+                }
+            }
+        });
+    }
     let st = state.clone();
     app.connect_shutdown(move |_| {
         if let Some(s) = st.borrow().as_ref() {
@@ -251,8 +295,51 @@ pub fn run() -> glib::ExitCode {
         }
     });
 
+    // macOS delivers links as Apple Events, which GTK doesn't forward (see
+    // transom-macos). Registered before the app runs, so the link an app launch was
+    // started for isn't missed; the handler runs on the main thread.
+    #[cfg(target_os = "macos")]
+    {
+        let app = app.downgrade();
+        let st = state.clone();
+        transom_macos::on_open_url(move |url| {
+            let (app, st) = (app.clone(), st.clone());
+            // From the main loop: at launch the event can come before startup.
+            glib::idle_add_local_once(move || {
+                let (Some(app), Some(s)) = (app.upgrade(), st.borrow().clone()) else {
+                    tracing::warn!("a link arrived before the app started; ignored");
+                    return;
+                };
+                let w = active_window(&app, &s);
+                w.window.present();
+                open_link(&w, &url, None);
+            });
+            // The event is handled inside GDK's NSRunLoop wait, which an idle source
+            // added from this thread doesn't interrupt: without a wakeup the link waits
+            // for the next unrelated event (mouse, focus) when the app is already running.
+            glib::MainContext::default().wakeup();
+        });
+    }
+
     crate::dev::install(&app);
     app.run()
+}
+
+/// Connect to an `rdp://` link (command line, desktop handler, or macOS), after
+/// confirmation: links come from web pages and mail.
+fn open_link(w: &Rc<MainWindow>, link: &str, password: Option<SecretString>) {
+    match transom_view::core::rdpfile::RdpFile::from_uri(link)
+        .ok()
+        .and_then(|f| transom_view::core::profile::Profile::from_rdp(&f))
+    {
+        Some(p) => w.open_untrusted(p, "a link", password),
+        None => {
+            // Don't echo a whole hostile link into the UI.
+            let shown: String = link.chars().take(80).collect();
+            let more = if link.chars().count() > 80 { "…" } else { "" };
+            w.toast(&format!("Invalid link: {shown}{more}"));
+        }
+    }
 }
 
 fn setup_app_actions(app: &adw::Application, state: &Rc<AppState>) {

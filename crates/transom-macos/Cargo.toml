@@ -1,0 +1,24 @@
+[package]
+name = "transom-macos"
+description = "macOS glue for the Transom app: rdp:// URL Apple Events"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "GPL-3.0-or-later"
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+# objc2: Objective-C runtime bindings, needed to register an Apple Event handler
+# (GTK forwards only file opens to GApplication on macOS, not URL opens).
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = [
+    "std",
+    "NSAppleEventDescriptor",
+    "NSAppleEventManager",
+    "NSObject",
+    "NSString",
+] }

@@ -26,12 +26,18 @@ jobs:
           libavcodec-free-devel libavutil-free-devel
           gobject-introspection-devel vala mutter dbus-daemon
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Install Rust
         run: |
           rustup-init -y --profile minimal --component rustfmt,clippy
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - name: Install cargo-deny
-        run: cargo install --locked cargo-deny
+        run: cargo install --locked cargo-deny --version 0.22.0
+      # verify.sh checks build-aux/packaging/RUST-CRATE-LICENSES.txt against Cargo.lock;
+      # pinned because the generated text can change between cargo-about versions.
+      - name: Install cargo-about
+        run: cargo install --locked cargo-about --version 0.9.3 --features cli
       - run: scripts/verify.sh
       - name: C API, GIR, typelib, VAPI and the Vala sample
         run: |
@@ -39,6 +45,27 @@ jobs:
           valac --pkg gtk4 --pkg transom-view-0 --vapidir build/capi/share/vala/vapi \
             -X -Ibuild/capi/include/transom-view-0 -X -Lbuild/capi/lib -X -ltransom-view-0 \
             examples/vala/transom-view-demo.vala -o build/transom-view-demo-vala
+
+  # Build, lint and test on 64-bit Arm too (as Tributary/Balun). The checks that
+  # don't depend on the architecture (cargo-deny, GIR/Vala) run on x86_64 only.
+  linux-aarch64:
+    name: Linux (aarch64)
+    runs-on: ubuntu-24.04-arm
+    container: registry.fedoraproject.org/fedora:latest
+    steps:
+      - name: Install system dependencies
+        run: >
+          dnf install -y --setopt=install_weak_deps=False
+          git gcc clang-devel pkgconf-pkg-config rustup python3
+          freerdp-devel libwinpr-devel gtk4-devel libadwaita-devel libsecret-devel
+          libavcodec-free-devel libavutil-free-devel
+          mutter dbus-daemon
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Rust
+        run: |
+          rustup-init -y --profile minimal --component rustfmt,clippy
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - run: scripts/verify.sh
 
   flatpak:
     name: Flatpak (GNOME 51)
@@ -48,6 +75,8 @@ jobs:
       options: --privileged
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Vendored cargo sources match Cargo.lock
         run: python3 build-aux/flatpak/cargo-sources.py Cargo.lock | diff -u build-aux/flatpak/cargo-sources.json -
       - uses: flatpak/flatpak-github-actions/flatpak-builder@79327416609af08178ad73b352877e51450790b3 # v6.8
@@ -55,6 +84,80 @@ jobs:
           bundle: transom.flatpak
           manifest-path: build-aux/flatpak/io.github.jm2.Transom.yml
           cache-key: flatpak-builder-${{ hashFiles('build-aux/flatpak/*', 'Cargo.lock') }}
+
+  # ── MSRV (minimum supported Rust version), as Tributary/Balun ─────────────
+  # Compile-proof for the `rust-version` in Cargo.toml (ADR 0003). The
+  # toolchain is read from that field, so raising the floor stays a one-line
+  # change. Keep the job name stable: it's a required check.
+  msrv:
+    name: MSRV
+    runs-on: ubuntu-latest
+    # Same image and packages as "Linux (full workspace)".
+    container: registry.fedoraproject.org/fedora:latest
+    steps:
+      - name: Install system dependencies
+        run: >
+          dnf install -y --setopt=install_weak_deps=False
+          git gcc clang-devel pkgconf-pkg-config rustup python3
+          freerdp-devel libwinpr-devel gtk4-devel libadwaita-devel libsecret-devel
+          libavcodec-free-devel libavutil-free-devel
+          gobject-introspection-devel vala mutter dbus-daemon
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Rust (Cargo.toml rust-version)
+        run: |
+          msrv="$(python3 -I -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["rust-version"])')"
+          # rust-version = "1.98" means 1.98.0: check against exactly that release.
+          case "$msrv" in *.*.*) ;; *) msrv="$msrv.0" ;; esac
+          echo "MSRV: $msrv"
+          rustup-init -y --profile minimal --default-toolchain "$msrv"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - name: Check (whole workspace, all targets, locked)
+        run: cargo check --workspace --all-targets --locked
+
+  # ── Desktop metadata (desktop entry, AppStream, MIME), as Tributary/Balun ──
+  # These files ship in every Linux package and the Flatpak; check them with
+  # the validators distributions and Flathub use.
+  desktop-metadata:
+    name: Desktop Metadata
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install validators
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            appstream desktop-file-utils libxml2-utils shared-mime-info
+      - name: Validate the desktop entry
+        # desktop-file-validate exits 0 on warnings and hints: any output fails.
+        run: |
+          status=0
+          output="$(desktop-file-validate data/io.github.jm2.Transom.desktop 2>&1)" \
+            || status=$?
+          if [ "$status" -ne 0 ] || [ -n "$output" ]; then
+            printf '%s\n' "$output" >&2
+            exit 1
+          fi
+      - name: Validate the AppStream metainfo
+        # Pedantic hints are shown but never fail; the one expected is
+        # cid-contains-uppercase-letter (the app ID is io.github.jm2.Transom).
+        run: appstreamcli validate --no-net --pedantic data/io.github.jm2.Transom.metainfo.xml
+      - name: Validate the shared-mime-info package
+        # shared-mime-info ships its DTD only as the internal subset of
+        # freedesktop.org.xml. That copy restricts generic-icon to the names
+        # freedesktop.org.xml itself uses (the spec allows any icon name, and
+        # .rdp files use network-server), so relax that one attribute to CDATA.
+        run: |
+          dtd="$RUNNER_TEMP/shared-mime-info.dtd"
+          sed -n '/^<!DOCTYPE mime-info \[$/,/^]>$/p' /usr/share/mime/packages/freedesktop.org.xml \
+            | sed -e '1d' -e '$d' \
+            | sed -E 's/^(<!ATTLIST generic-icon name ).*( #REQUIRED>)$/\1CDATA\2/' > "$dtd"
+          grep -q '^<!ELEMENT mime-info ' "$dtd"
+          grep -qx '<!ATTLIST generic-icon name CDATA #REQUIRED>' "$dtd"
+          xmllint --noout --dtdvalid "$dtd" data/io.github.jm2.Transom.mime.xml
 
   # ── macOS (.app/.dmg, Homebrew GTK + FreeRDP), as Tributary/Balun ──────────
   build-macos:

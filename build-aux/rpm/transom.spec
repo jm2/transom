@@ -1,15 +1,20 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Fedora / COPR spec. Sources from scripts/dist.sh (vendored crates: offline build).
+# The upstream version in SemVer spelling; Version is its RPM spelling (a prerelease
+# such as 0.2.0-alpha.1 becomes 0.2.0~alpha.1). scripts/release_check.py binds both to
+# the tag, and Packit rewrites Version the same way.
+%global upstream_version 0.0.1
+
 Name:           transom
 Version:        0.0.1
 Release:        1%{?dist}
 Summary:        Sharp remote desktops over RDP
 # App GPL-3.0-or-later; the bundled transom-view libraries Apache-2.0; vendored crates
-# under various permissive licences (see vendor/).
+# under various permissive licences (build-aux/packaging/RUST-CRATE-LICENSES.txt).
 License:        GPL-3.0-or-later AND Apache-2.0 AND MIT AND (MIT OR Apache-2.0)
 URL:            https://github.com/jm2/transom
-Source0:        %{name}-%{version}.tar.gz
-Source1:        %{name}-%{version}-vendor.tar.xz
+Source0:        %{name}-%{upstream_version}.tar.gz
+Source1:        %{name}-%{upstream_version}-vendor.tar.xz
 
 BuildRequires:  cargo >= 1.98
 BuildRequires:  rust >= 1.98
@@ -33,7 +38,7 @@ Transom connects to Windows and GNOME computers using the Remote Desktop Protoco
 rendering remote sessions pixel for pixel at 100%%, 200%% and fractional scales.
 
 %prep
-%autosetup -n %{name}-%{version}
+%autosetup -n %{name}-%{upstream_version}
 tar -xJf %{SOURCE1}
 mkdir -p .cargo
 cat > .cargo/config.toml <<CFG
@@ -44,6 +49,9 @@ directory = "vendor"
 CFG
 
 %build
+# Fedora's Rust flags (debuginfo for the -debuginfo package, frame pointers, ...), as
+# %%cargo_build would set them; %%check uses the same so nothing is rebuilt.
+export RUSTFLAGS="%{?build_rustflags}"
 cargo build --release --locked --offline -p transom
 
 %install
@@ -58,10 +66,11 @@ done
 %check
 desktop-file-validate %{buildroot}%{_datadir}/applications/io.github.jm2.Transom.desktop
 appstream-util validate-relax --nonet %{buildroot}%{_metainfodir}/io.github.jm2.Transom.metainfo.xml
+export RUSTFLAGS="%{?build_rustflags}"
 cargo test --release --locked --offline -p transom-view-core
 
 %files
-%license COPYING LICENSE-APACHE
+%license COPYING LICENSE-APACHE build-aux/packaging/RUST-CRATE-LICENSES.txt
 %doc README.md
 %{_bindir}/transom
 %{_datadir}/applications/io.github.jm2.Transom.desktop

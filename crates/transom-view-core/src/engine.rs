@@ -222,6 +222,9 @@ pub enum EngineEvent {
     },
     AuthRequired(AuthRequest),
     CertificatePrompt(CertPrompt),
+    /// Something the user should know about the session, in plain text (for example,
+    /// that it connected with weaker protection than requested).
+    Notice(String),
     /// Server redirection in progress; the engine reconnects by itself.
     Redirecting {
         target: String,

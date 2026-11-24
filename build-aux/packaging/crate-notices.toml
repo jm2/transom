@@ -1,0 +1,28 @@
+# Copyright notices for crates whose published archive carries no licence file.
+# cargo-about can then only print the licence's standard text, with a "Copyright (c)
+# <year> <copyright holders>" placeholder; scripts/gen-licenses.sh replaces that line
+# with these notices, and fails for any crate there that isn't listed. Each notice is
+# taken from the crate's source repository at the commit it was published from
+# (.cargo_vcs_info.json); recheck it when the crate is updated.
+
+[libsecret]
+notice = "Copyright (c) 2022 GNOME Community"
+source = "https://gitlab.gnome.org/World/Rust/libsecret-rs/-/blob/7e6720f87b61cbc832b4ca998211d7c499df32a0/LICENSE"
+
+[libsecret-sys]
+notice = "Copyright (c) 2022 GNOME Community"
+source = "https://gitlab.gnome.org/World/Rust/libsecret-rs/-/blob/7e6720f87b61cbc832b4ca998211d7c499df32a0/LICENSE"
+
+# objc2's repository licence (LICENSE.md) names MIT for these crates but gives no
+# copyright line; objc2 and objc2-encode name Mads Marquart as their author.
+[objc2]
+notice = "No copyright line given upstream (the objc2 project, by Mads Marquart)"
+source = "https://github.com/madsmtm/objc2/blob/d7d2fa23ceaa5e6096c923b081040e5d81b3b9df/LICENSE.md"
+
+[objc2-encode]
+notice = "No copyright line given upstream (the objc2 project, by Mads Marquart)"
+source = "https://github.com/madsmtm/objc2/blob/8d214f5477365ffcbcbb7de058c86ed9a518efb7/LICENSE.md"
+
+[objc2-foundation]
+notice = "No copyright line given upstream (the objc2 project, by Mads Marquart)"
+source = "https://github.com/madsmtm/objc2/blob/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md"

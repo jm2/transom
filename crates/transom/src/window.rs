@@ -9,6 +9,7 @@ use gtk::{gdk, gio, glib};
 use transom_view::TransomView;
 use transom_view::core::profile::Profile;
 use transom_view::core::rdpfile::RdpFile;
+use transom_view::core::secrecy::SecretString;
 
 use crate::app::{AppState, app_shortcuts};
 use crate::dialogs::{self, EditorResult};
@@ -32,6 +33,9 @@ pub struct MainWindow {
     switcher: adw::ViewSwitcher,
     profiles: RefCell<Vec<Profile>>,
     inhibited: std::cell::Cell<bool>,
+    /// The open "connect to … ?" confirmation, if any (answered by
+    /// `win.confirm-connection` in automated checks).
+    pending_confirm: RefCell<Option<adw::AlertDialog>>,
 }
 
 impl std::fmt::Debug for MainWindow {
@@ -76,7 +80,9 @@ impl MainWindow {
             .description("Add a connection, import an .rdp file, or type an address above")
             .child(&empty_add)
             .build();
-        let list_stack = gtk::Stack::new();
+        // Not homogeneous: the list card hugs its rows instead of taking the empty
+        // page's height.
+        let list_stack = gtk::Stack::builder().vhomogeneous(false).build();
         list_stack.add_named(&list, Some("list"));
         list_stack.add_named(&empty, Some("empty"));
         let column = gtk::Box::new(gtk::Orientation::Vertical, 18);
@@ -192,6 +198,7 @@ impl MainWindow {
             switcher,
             profiles: RefCell::new(Vec::new()),
             inhibited: std::cell::Cell::new(false),
+            pending_confirm: RefCell::new(None),
         });
         win.setup(&quick);
         win.refresh();
@@ -391,6 +398,18 @@ impl MainWindow {
             }),
         );
         add("screenshot", Box::new(|w| w.save_screenshot()));
+        // For headless checks (TRANSOM_DEBUG_ACTIONS): accept a pending confirmation
+        // with its defaults (nothing extra shared).
+        add(
+            "confirm-connection",
+            Box::new(|w| {
+                let pending = w.pending_confirm.borrow_mut().take();
+                if let Some(d) = pending {
+                    d.emit_by_name::<()>("response", &[&"connect"]);
+                    d.force_close();
+                }
+            }),
+        );
         add(
             "focus-chrome",
             Box::new(|w| {
@@ -638,8 +657,14 @@ impl MainWindow {
         }
     }
 
-    /// Open an `.rdp` file and connect (like double-clicking it in a file manager).
-    pub fn open_rdp_bytes(self: &Rc<Self>, bytes: &[u8], name: &str) {
+    /// Open an `.rdp` file and connect (like double-clicking it in a file manager),
+    /// after confirmation. `password`: from `--password-file` on the command line.
+    pub fn open_rdp_bytes(
+        self: &Rc<Self>,
+        bytes: &[u8],
+        name: &str,
+        password: Option<SecretString>,
+    ) {
         match RdpFile::parse_bytes(bytes)
             .ok()
             .and_then(|f| Profile::from_rdp(&f))
@@ -648,17 +673,37 @@ impl MainWindow {
                 if p.name.is_empty() {
                     p.name = name.trim_end_matches(".rdp").to_string();
                 }
-                self.open_session(p, true, None);
+                self.open_untrusted(p, &format!("the file “{name}”"), password);
             }
             None => self.toast(&format!("{name} isn't a valid .rdp file")),
         }
+    }
+
+    /// A connection from a file or link: confirm first (see
+    /// [`dialogs::confirm_untrusted`]), then connect as a temporary session.
+    pub fn open_untrusted(
+        self: &Rc<Self>,
+        profile: Profile,
+        source: &str,
+        password: Option<SecretString>,
+    ) {
+        self.window.present();
+        let weak = Rc::downgrade(self);
+        let dialog = dialogs::confirm_untrusted(&self.window, profile, source, move |p| {
+            let Some(w) = weak.upgrade() else { return };
+            w.pending_confirm.borrow_mut().take();
+            if let Some(p) = p {
+                w.open_session(p, true, password);
+            }
+        });
+        *self.pending_confirm.borrow_mut() = Some(dialog);
     }
 
     pub fn open_session(
         self: &Rc<Self>,
         profile: Profile,
         temporary: bool,
-        password: Option<transom_view::core::secrecy::SecretString>,
+        password: Option<SecretString>,
     ) {
         let session = Session::new(self.state.clone(), profile, temporary);
         let page = self.tab_view.append(&session.root);
