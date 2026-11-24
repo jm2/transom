@@ -296,12 +296,16 @@ impl Session {
         toast.set_timeout(0);
         if let Some(command) = copy {
             toast.set_button_label(Some("_Copy Command"));
-            let (view, overlay) = (self.view.clone(), toasts.clone());
+            // Weak, and the clipboard rather than the view: the toast stays until
+            // dismissed, and must keep neither the overlay nor the session alive.
+            let (clipboard, overlay) = (self.view.clipboard(), toasts.downgrade());
             toast.connect_button_clicked(move |_| {
-                view.clipboard().set_text(&command);
-                overlay.add_toast(adw::Toast::new(
-                    "Command copied: run it in a terminal, then restart Transom",
-                ));
+                clipboard.set_text(&command);
+                if let Some(overlay) = overlay.upgrade() {
+                    overlay.add_toast(adw::Toast::new(
+                        "Command copied: run it in a terminal, then restart Transom",
+                    ));
+                }
             });
         }
         toasts.add_toast(toast);

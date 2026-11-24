@@ -34,8 +34,9 @@ jobs:
         run: |
           set -uo pipefail
           title="Bundled libraries changed: rebuild the AppImage, macOS and Windows packages"
-          python3 scripts/bundled-versions.py --check > report.md
-          status=$?
+          # The step's shell runs with -e: take the status in an OR-list.
+          status=0
+          python3 scripts/bundled-versions.py --check > report.md || status=$?
           cat report.md
           case $status in
             0) exit 0 ;;

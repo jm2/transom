@@ -13,9 +13,10 @@ recorded at the last release:
   scripts/bundled-versions.py --check   # print the changes (Markdown); exit 1 if any
   scripts/bundled-versions.py --write   # record the current versions (at a release)
 
-Exit status 2: a source couldn't be queried (no report is better than a wrong one).
-Debian's versions come from apt-cache with trixie-security, natively on Debian 13
-or in a debian:trixie container (podman or docker); MSYS2's from
+Exit status 2: a source couldn't be queried, or didn't list every package (no report
+is better than a wrong one, and the baseline is left as it was). Debian's versions
+come from apt-cache with trixie-security, after a fresh apt-get update: natively on
+Debian 13 when run as root, else in a debian:trixie container (podman or docker); MSYS2's from
 packages.msys2.org; Homebrew's from formulae.brew.sh; the Flatpak's pins are
 checked against the latest upstream releases (GitHub; GITHUB_TOKEN is used if set).
 """
@@ -82,12 +83,14 @@ def debian_versions():
         "apt-cache policy " + " ".join(DEBIAN) + " 2>/dev/null"
     )
     os_release = Path("/etc/os-release").read_text() if Path("/etc/os-release").exists() else ""
-    if shutil.which("apt-cache") and 'VERSION_CODENAME=trixie' in os_release:
-        cmd = ["sh", "-c", "apt-cache policy " + " ".join(DEBIAN)]
+    # Natively only as root: the package lists must be refreshed first (a stale
+    # list would hide a security update), and apt-get update needs root.
+    if shutil.which("apt-cache") and "VERSION_CODENAME=trixie" in os_release and os.geteuid() == 0:
+        cmd = ["sh", "-c", script]
     elif engine := shutil.which("podman") or shutil.which("docker"):
         cmd = [engine, "run", "--rm", "debian:trixie", "sh", "-c", script]
     else:
-        raise QueryError("Debian: needs Debian 13 (apt-cache), or podman or docker for a debian:trixie container")
+        raise QueryError("Debian: needs Debian 13 as root (apt-get update), or podman or docker for a debian:trixie container")
     out = subprocess.run(cmd, capture_output=True, text=True, check=False)
     if out.returncode:
         raise QueryError(f"Debian: {' '.join(cmd[:3])}… failed ({out.returncode}): {out.stderr.strip()[:300]}")
@@ -192,6 +195,13 @@ def main():
     expected = {("debian", p) for p in DEBIAN} | {("msys2", p) for p in MSYS2} \
         | {("homebrew", p) for p in HOMEBREW} | {("flatpak", p) for p in FLATPAK}
     missing = sorted(expected - now.keys())
+    if missing:
+        # A package a source didn't list can't be compared, and writing the baseline
+        # without it would stop tracking it: neither mode goes on.
+        print("bundled-versions: not found (renamed or removed? update the lists in "
+              "scripts/bundled-versions.py): "
+              + ", ".join(f"{p} ({SOURCE_NAMES[s]})" for s, p in missing), file=sys.stderr)
+        return 2
 
     if args.write:
         lines = [
@@ -203,8 +213,6 @@ def main():
         lines += [f"{s}\t{p}\t{v}" for (s, p), v in sorted(now.items())]
         BASELINE.write_text("\n".join(lines) + "\n")
         print(f"wrote {BASELINE.relative_to(ROOT)} ({len(now)} packages)")
-        for s, p in missing:
-            print(f"warning: {p} not found in {SOURCE_NAMES[s]}", file=sys.stderr)
         return 0
 
     base = read_baseline()
@@ -221,10 +229,6 @@ def main():
     print("|---|---|---|---|")
     for s, p, was, ver in changes:
         print(f"| `{p}` | {SOURCE_NAMES[s]} | {was} | {ver} |")
-    if missing:
-        print()
-        print("Not found (the package list in scripts/bundled-versions.py may need an update): "
-              + ", ".join(f"`{p}` ({SOURCE_NAMES[s]})" for s, p in missing))
     return 1
 
 

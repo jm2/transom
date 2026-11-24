@@ -344,6 +344,10 @@ unsafe fn with_hooks<R>(
 impl Hooks {
     /// Copy the video pixels of `area` (surface coordinates, may overlap) back into
     /// surface `id`'s memory and take them out of its video region.
+    ///
+    /// # Safety
+    /// `gfx` must be the graphics context these hooks are installed on, and this must
+    /// run on its channel thread, which owns the surfaces' memory.
     unsafe fn read_back(&mut self, gfx: *mut ffi::RdpgfxClientContext, id: u16, area: &[Rect]) {
         if area.is_empty() {
             return;
@@ -399,6 +403,10 @@ impl Hooks {
 
     /// Keep surface `id`'s video region within `MAX_SURFACE_RECTS`: a hole cut into it
     /// splits a rectangle, so repeated writes could fragment it without bound.
+    ///
+    /// # Safety
+    /// `gfx` must be the graphics context these hooks are installed on, and this must
+    /// run on its channel thread, which owns the surfaces' memory.
     unsafe fn bound(&mut self, gfx: *mut ffi::RdpgfxClientContext, id: u16) {
         let over = self
             .surfaces
@@ -414,6 +422,10 @@ impl Hooks {
     /// Before a command writes `r` of surface `id`: copy back the video pixels inside
     /// `r` if the command may not overwrite all of them (`partial`), then hand `r`
     /// to the framebuffer.
+    ///
+    /// # Safety
+    /// `gfx` must be the graphics context these hooks are installed on, and this must
+    /// run on its channel thread, which owns the surfaces' memory.
     unsafe fn before_write(
         &mut self,
         gfx: *mut ffi::RdpgfxClientContext,
@@ -443,6 +455,10 @@ impl Hooks {
 
     /// Copy surface `id`'s whole video region into its memory and empty the region.
     /// The surface keeps its hardware decoder: later frames start a new region.
+    ///
+    /// # Safety
+    /// `gfx` must be the graphics context these hooks are installed on, and this must
+    /// run on its channel thread, which owns the surfaces' memory.
     unsafe fn flatten(&mut self, gfx: *mut ffi::RdpgfxClientContext, id: u16) {
         let area = match self.surfaces.get(&id) {
             Some(s) => s.region.clone(),
@@ -458,6 +474,10 @@ impl Hooks {
 
     /// Stop hardware decoding for surface `id` (FreeRDP's software decoder takes over;
     /// the video pixels are copied back first).
+    ///
+    /// # Safety
+    /// `gfx` must be the graphics context these hooks are installed on, and this must
+    /// run on its channel thread, which owns the surfaces' memory.
     unsafe fn fall_back_to_software(&mut self, gfx: *mut ffi::RdpgfxClientContext, id: u16) {
         let area = match self.surfaces.get(&id) {
             Some(s) => s.region.clone(),
@@ -654,6 +674,10 @@ unsafe extern "C" fn surface_command(
 }
 
 /// Verify mode: hardware-decoded pixels (converted like FreeRDP) vs FreeRDP's own.
+///
+/// # Safety
+/// `gfx` must be a valid graphics context, and this must run on its channel thread,
+/// which owns surface `id`'s memory.
 unsafe fn verify(gfx: *mut ffi::RdpgfxClientContext, id: u16, frame: &HwFrame, rects: &[Rect]) {
     let Ok(nv12) = frame.download() else { return };
     // SAFETY: FreeRDP's surface memory, on the channel thread.

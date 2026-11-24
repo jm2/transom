@@ -448,8 +448,8 @@ unsafe fn event_loop(
                 Ok(EngineCommand::LayoutMonitors(_)) => {}
                 // SAFETY: input belongs to the live context.
                 Ok(EngineCommand::Input(ev)) => unsafe { send_input((*ctx).input, ev) },
-                // SAFETY: as above.
                 Ok(EngineCommand::VideoUnsupported) => state.video.request_disable(),
+                // SAFETY: as for Input.
                 Ok(EngineCommand::CtrlAltDel) => unsafe { send_ctrl_alt_del((*ctx).input) },
                 Ok(EngineCommand::ClipboardLocalFormats(f)) => {
                     if state.config.clipboard.to_remote() {

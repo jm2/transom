@@ -39,6 +39,18 @@ else
     echo "warning: cargo-about not installed (cargo install --locked cargo-about --version 0.9.3 --features cli); skipping the crate licence check" >&2
 fi
 
+step "script tests"
+python3 -I scripts/test_release_check.py
+python3 -I scripts/test_unsafe_inventory.py
+
+step "unsafe sites justified (docs/unsafe-review.md)"
+summary=$(python3 -I scripts/unsafe-inventory.py | tail -1)
+echo "$summary"
+[[ $summary == *"; 0 without"* ]] || {
+    echo "every unsafe site needs its own SAFETY note: run scripts/unsafe-inventory.py for the ones marked !" >&2
+    exit 1
+}
+
 if [[ "${1:-}" != "--core" ]]; then
     step "flatpak cargo sources"
     python3 -I build-aux/flatpak/cargo-sources.py Cargo.lock \
