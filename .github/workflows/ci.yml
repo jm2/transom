@@ -32,6 +32,10 @@ jobs:
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - name: Install cargo-deny
         run: cargo install --locked cargo-deny
+      # verify.sh checks build-aux/packaging/RUST-CRATE-LICENSES.txt against Cargo.lock;
+      # pinned because the generated text can change between cargo-about versions.
+      - name: Install cargo-about
+        run: cargo install --locked cargo-about --version 0.9.3 --features cli
       - run: scripts/verify.sh
       - name: C API, GIR, typelib, VAPI and the Vala sample
         run: |
