@@ -42,6 +42,27 @@ jobs:
             -X -Ibuild/capi/include/transom-view-0 -X -Lbuild/capi/lib -X -ltransom-view-0 \
             examples/vala/transom-view-demo.vala -o build/transom-view-demo-vala
 
+  # Build, lint and test on 64-bit Arm too (as Tributary/Balun). The checks that
+  # don't depend on the architecture (cargo-deny, GIR/Vala) run on x86_64 only.
+  linux-aarch64:
+    name: Linux (aarch64)
+    runs-on: ubuntu-24.04-arm
+    container: registry.fedoraproject.org/fedora:latest
+    steps:
+      - name: Install system dependencies
+        run: >
+          dnf install -y --setopt=install_weak_deps=False
+          git gcc clang-devel pkgconf-pkg-config rustup python3
+          freerdp-devel libwinpr-devel gtk4-devel libadwaita-devel libsecret-devel
+          libavcodec-free-devel libavutil-free-devel
+          mutter dbus-daemon
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Rust
+        run: |
+          rustup-init -y --profile minimal --component rustfmt,clippy
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - run: scripts/verify.sh
+
   flatpak:
     name: Flatpak (GNOME 51)
     runs-on: ubuntu-latest

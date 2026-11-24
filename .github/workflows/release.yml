@@ -9,8 +9,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Release tag to build (vX.Y.Z)
-        required: true
+        description: Release tag to build (vX.Y.Z); empty builds the selected branch
+        required: false
+        default: ""
       dry_run:
         description: Build only; don't publish
         type: boolean
@@ -38,12 +39,18 @@ jobs:
           DISPATCH_TAG: ${{ inputs.tag }}
         run: |
           TAG="${RELEASE_TAG:-$DISPATCH_TAG}"
+          # A manual run without a tag packages the selected branch (nothing is ever
+          # published from a manual run: attest and publish need a release event).
+          if [[ -z "$TAG" && "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
+            echo "tag=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           SEMVER='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$'
           [[ "$TAG" =~ $SEMVER ]] || { echo "tag must be vX.Y.Z[-pre]; got '$TAG'" >&2; exit 1; }
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: refs/tags/${{ steps.release.outputs.tag }}
+          ref: ${{ steps.release.outputs.tag && format('refs/tags/{0}', steps.release.outputs.tag) || github.sha }}
           persist-credentials: false
       - name: Resolve immutable source and version
         id: source
@@ -51,7 +58,9 @@ jobs:
           TAG: ${{ steps.release.outputs.tag }}
         run: |
           VERSION="$(awk -F'"' '/^\[workspace.package\]/{p=1; next} p && /^version = /{print $2; exit}' Cargo.toml)"
-          [[ "$TAG" == "v$VERSION" ]] || { echo "tag $TAG != Cargo version $VERSION" >&2; exit 1; }
+          if [[ -n "$TAG" ]]; then
+            [[ "$TAG" == "v$VERSION" ]] || { echo "tag $TAG != Cargo version $VERSION" >&2; exit 1; }
+          fi
           echo "build_ref=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
@@ -223,11 +232,14 @@ jobs:
         run: >-
           dnf install -y --setopt=install_weak_deps=False git gcc clang-devel pkgconf-pkg-config
           rustup freerdp-devel libwinpr-devel gtk4-devel libadwaita-devel libsecret-devel
-          libavcodec-free-devel libavutil-free-devel
+          libavcodec-free-devel libavutil-free-devel rpm-build
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.prepare.outputs.build_ref }}
           persist-credentials: false
+      # rpm-build provides find-requires, which cargo-generate-rpm uses for the
+      # automatic library requirements; its built-in fallback emits glibc "[WEAK]"
+      # symbol versions that nothing provides.
       - name: Build .rpm
         run: |
           rustup-init -y --profile minimal
@@ -258,7 +270,8 @@ jobs:
         run: |
           useradd -m builder
           chown -R builder .
-          su builder -c 'scripts/dist.sh && cd build-aux/arch && makepkg --noconfirm --nodeps'
+          # dist.sh writes the source tarballs to dist/; makepkg wants them beside the PKGBUILD.
+          su builder -c 'scripts/dist.sh && cp dist/transom-*.tar.* build-aux/arch/ && cd build-aux/arch && makepkg --noconfirm --nodeps'
           mkdir -p dist
           cp build-aux/arch/transom-*.pkg.tar.zst dist/transom-x86_64.pkg.tar.zst
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
