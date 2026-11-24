@@ -7,7 +7,7 @@
 | Debian 13+, Ubuntu 25.04+ | .deb | `cargo deb -p transom` | Needs FreeRDP ≥ 3.15: Debian 12 and Ubuntu 24.04 are too old |
 | Arch Linux | pkg.tar.zst | `build-aux/arch/PKGBUILD` (checkout); `build-aux/arch/PKGBUILD.aur` (AUR, release tarball) | |
 | macOS 13+ (Apple silicon) | .app / .dmg | `scripts/build-macos.sh --dmg` (Homebrew) | Ad-hoc signed; not notarised yet |
-| Windows 10/11 x64, arm64 | portable .zip, Inno Setup installer | `scripts/build-windows.ps1 [-InnoSetup]` (MSYS2 CLANG64/CLANGARM64) | The installer registers `.rdp` and `rdp://` (optional task) |
+| Windows 10/11 x64, arm64 | portable .zip, Inno Setup installer | `scripts/build-windows.ps1 [-InnoSetup]` (MSYS2 CLANG64/CLANGARM64) | The installer registers `.rdp` and `rdp://` (optional task, off by default) |
 
 `.github/workflows/release.yml` builds all of these from a release tag. It writes
 `SHA256SUMS.txt` over the exact asset list, attests build provenance
@@ -26,10 +26,10 @@ GitHub release.
 | `rdp://` links, `.rdp` files | desktop file (`x-scheme-handler/rdp`) | Info.plist; links via an Apple Event handler (`transom-macos`) | installer registry entries |
 
 Verified in the Windows 11 test VM (2026-11-22): `build-windows.ps1 -InnoSetup` builds
-the installer (Inno Setup 6.7); a silent install registers `rdp:` and the `Transom.rdp`
-ProgID; an `rdp://` link opened through the shell and an `.rdp` file opened through the
-ProgID both start a connection in the installed app; the uninstaller removes every
-registration and leaves mstsc's `.rdp` default alone
+the installer (Inno Setup 6.7); a silent install with `/TASKS=rdpfiles` registers `rdp:`
+and the `Transom.rdp` ProgID; an `rdp://` link opened through the shell and an `.rdp`
+file opened through the ProgID both start a connection in the installed app; the
+uninstaller removes every registration and leaves mstsc's `.rdp` default alone
 (`tests/servers/windows/installer-*.ps1`).
 
 Regenerate the raster icons after changing the SVG with `scripts/gen-icons.sh`.
