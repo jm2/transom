@@ -46,6 +46,35 @@ cargo about generate --frozen --fail -c about.toml -m crates/transom/Cargo.toml 
     awk '{ sub(/[ \t\r]+$/, "") }
          $0 == "" { blank++; next }
          { while (blank > 0) { print ""; blank-- } print }' > "$tmp"
+# Crates without a licence file get the standard text with a "<copyright holders>"
+# placeholder: put their upstream notices (build-aux/packaging/crate-notices.toml) in
+# its place, and fail for a crate that has none listed.
+python3 -I - "$tmp" build-aux/packaging/crate-notices.toml <<'PY'
+import re
+import sys
+import tomllib
+
+path, table = sys.argv[1], sys.argv[2]
+notices = tomllib.load(open(table, "rb"))
+placeholder = "Copyright (c) <year> <copyright holders>"
+sections = open(path, encoding="utf-8").read().split("\n" + "-" * 80 + "\n")
+for i, sec in enumerate(sections):
+    if placeholder not in sec:
+        continue
+    crates = re.findall(r"^  (\S+) \S+", sec.split("\n\n")[1], re.M)
+    missing = [c for c in crates if c not in notices]
+    if missing:
+        sys.exit(f"gen-licenses: no licence file and no notice in {table}: {', '.join(missing)}")
+    lines = [
+        "(These crates ship no licence file, so this is the licence's standard text;",
+        "their copyright notices, from their source repositories:)",
+    ]
+    for c in crates:
+        lines.append(f"  {c}: {notices[c]['notice']}")
+        lines.append(f"    {notices[c]['source']}")
+    sections[i] = sec.replace(placeholder, "\n".join(lines))
+open(path, "w", encoding="utf-8").write(("\n" + "-" * 80 + "\n").join(sections))
+PY
 
 if (( check )); then
     if ! diff -q "$out" "$tmp" >/dev/null; then

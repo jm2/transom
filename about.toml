@@ -39,3 +39,20 @@ targets = [
 # into the binary.
 ignore-build-dependencies = true
 ignore-dev-dependencies = true
+
+# windows-rs ships its MIT text as license-mit, a name cargo-about doesn't scan:
+# without these it would print the standard text with a "<copyright holders>"
+# placeholder in place of Microsoft's notice. The checksum pins the file's text.
+[windows-sys.clarify]
+license = "MIT OR Apache-2.0"
+[[windows-sys.clarify.files]]
+path = "license-mit"
+license = "MIT"
+checksum = "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+
+[windows-link.clarify]
+license = "MIT OR Apache-2.0"
+[[windows-link.clarify.files]]
+path = "license-mit"
+license = "MIT"
+checksum = "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"

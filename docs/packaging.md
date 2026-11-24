@@ -24,7 +24,10 @@ compiled into the binary, the transom-view libraries' Apache-2.0 among them.
 [cargo-about](https://github.com/EmbarkStudios/cargo-about) (`about.toml`, template
 `build-aux/packaging/about.hbs`), over the union of the shipped targets. The file is
 committed, so the offline builds (Flatpak, RPM spec, Arch) need no extra tool: rerun the
-script after changing `Cargo.lock`. `scripts/verify.sh` fails while the file is stale
+script after changing `Cargo.lock`. A crate whose archive has no licence file would get the
+licence's standard text with a placeholder copyright line; the script puts its upstream
+notice there from `build-aux/packaging/crate-notices.toml`, and fails for a crate that
+has none listed. `scripts/verify.sh` fails while the file is stale
 (CI installs cargo-about 0.9.3; locally,
 `cargo install --locked cargo-about --version 0.9.3 --features cli`).
 
