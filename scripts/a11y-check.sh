@@ -13,6 +13,6 @@ run() {
     grep -q "A11Y OK" <<<"$out" || fail=1
 }
 run "connection list" env INJECT_AFTER=5 scripts/app-shot.sh a11y-list 1 9 --seed-profile
-run "session" env INJECT_AFTER=9 scripts/app-shot.sh a11y-session 1 13 --seed-trust -- \
+run "session" env INJECT_AFTER=9 TRANSOM_DEBUG_ACTIONS=win.confirm-connection@3 scripts/app-shot.sh a11y-session 1 13 --seed-trust -- \
     --password-file /state/grd.pw rdp://transom@localhost:13389
 exit $fail

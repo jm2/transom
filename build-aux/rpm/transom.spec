@@ -44,6 +44,9 @@ directory = "vendor"
 CFG
 
 %build
+# Fedora's Rust flags (debuginfo for the -debuginfo package, frame pointers, ...), as
+# %%cargo_build would set them; %%check uses the same so nothing is rebuilt.
+export RUSTFLAGS="%{?build_rustflags}"
 cargo build --release --locked --offline -p transom
 
 %install
@@ -58,6 +61,7 @@ done
 %check
 desktop-file-validate %{buildroot}%{_datadir}/applications/io.github.jm2.Transom.desktop
 appstream-util validate-relax --nonet %{buildroot}%{_metainfodir}/io.github.jm2.Transom.metainfo.xml
+export RUSTFLAGS="%{?build_rustflags}"
 cargo test --release --locked --offline -p transom-view-core
 
 %files

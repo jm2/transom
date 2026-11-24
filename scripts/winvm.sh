@@ -41,6 +41,31 @@ esac
 VM=$ROOT/$name
 USER_NAME=rdp
 
+ps_quote() { # STRING → PowerShell single-quoted literal: quote characters doubled,
+    # including the typographic ones (U+2018..U+201B) PowerShell also takes as quotes.
+    local s=$1 q
+    for q in "'" $'\xe2\x80\x98' $'\xe2\x80\x99' $'\xe2\x80\x9a' $'\xe2\x80\x9b'; do
+        s=${s//"$q"/"$q$q"}
+    done
+    printf "'%s'" "$s"
+}
+
+# PowerShell (needs $user): create the guest staging folder C:\transom (pushed scripts
+# and secrets, probe results) without the "Authenticated Users: Modify" it would
+# inherit from C:\. Only SYSTEM (the guest agent), Administrators and the rdp user
+# (whose session probes, `session-run`, write their results there) get access. Also
+# fixes a folder created with inherited permissions by an older version of this script.
+STAGING_PS=$(cat <<'PS'
+$dir = 'C:\transom'
+if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir | Out-Null }
+if (-not (Get-Acl -LiteralPath $dir).AreAccessRulesProtected) {
+    # *S-1-5-18 = SYSTEM, *S-1-5-32-544 = Administrators (the names are localised).
+    icacls $dir /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' "${user}:(OI)(CI)M" | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "icacls $dir failed ($LASTEXITCODE)" }
+}
+PS
+)
+
 qmp() { # JSON command → reply (first non-greeting line)
     python3 -I - "$VM/qmp.sock" "$1" <<'PY'
 import json, socket, sys
@@ -231,12 +256,23 @@ INFO
 case "$cmd" in
 fetch)
     mkdir -p "$ISO"
-    get() { [[ -f $ISO/$1 ]] || { curl -fL -C - --retry 5 -o "$ISO/$1.part" "$2" && mv "$ISO/$1.part" "$ISO/$1"; }; }
+    # HTTPS only, for redirects too.
+    get() { [[ -f $ISO/$1 ]] || { curl -fL --proto =https --proto-redir =https -C - --retry 5 -o "$ISO/$1.part" "$2" && mv "$ISO/$1.part" "$ISO/$1"; }; }
     get win11-eval.iso 'https://go.microsoft.com/fwlink/?linkid=2334167&clcid=0x409&culture=en-us&country=us' &
     get server2025-eval.iso 'https://go.microsoft.com/fwlink/?linkid=2293312&clcid=0x409&culture=en-us&country=us' &
     # Pinned: the "stable" link redirects to plain http.
     get virtio-win-0.1.302.iso 'https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/archive-virtio/virtio-win-0.1.302-1/virtio-win-0.1.302.iso' &
     wait
+    # TODO(security): pin the SHA-256 of virtio-win-0.1.302.iso, taken from a source
+    # other than the download itself; until then only HTTPS vouches for it. (The
+    # Microsoft evaluation links always serve the latest build, so those can't be pinned.)
+    virtio_sha256=
+    if [[ -z $virtio_sha256 ]]; then
+        echo "warning: virtio-win-0.1.302.iso is not checked against a pinned SHA-256 (TODO in $0)" >&2
+    elif [[ -f $ISO/virtio-win-0.1.302.iso ]]; then
+        echo "$virtio_sha256  $ISO/virtio-win-0.1.302.iso" | sha256sum --check --quiet - ||
+            { rm -f "$ISO/virtio-win-0.1.302.iso"; echo "virtio-win ISO: SHA-256 mismatch, removed" >&2; exit 1; }
+    fi
     ln -sf virtio-win-0.1.302.iso "$ISO/virtio-win.iso"
     ;;
 prep)
@@ -247,9 +283,21 @@ prep)
      new_password > "$VM/password"
      printf '%s\n%s\n' "$USER_NAME" "$(cat "$VM/password")" > "$VM/creds"
      a=$(mktemp -d -p "${TMPDIR:-/var/tmp}")
-     sed -e "s/@PASSWORD@/$(cat "$VM/password")/g" -e "s/@USER@/$USER_NAME/g" \
-         -e "s/@COMPUTER_NAME@/$HOST/" -e "s/@IMAGE_INDEX@/$INDEX/" -e "s/@ROLE@/$ROLE/" \
-         "$SRC/autounattend.xml.in" > "$a/autounattend.xml"
+     # Python reads the password from its file (sed would need it on its command line).
+     python3 -I - "$SRC/autounattend.xml.in" "$VM/password" "$USER_NAME" "$HOST" "$INDEX" "$ROLE" \
+         > "$a/autounattend.xml" <<'PY'
+import sys
+from xml.sax.saxutils import escape
+template, password_file, user, host, index, role = sys.argv[1:]
+with open(password_file) as f:
+    password = f.read().rstrip("\n")
+with open(template) as f:
+    xml = f.read()
+for key, value in (("PASSWORD", password), ("USER", user), ("COMPUTER_NAME", host),
+                   ("IMAGE_INDEX", index), ("ROLE", role)):
+    xml = xml.replace(f"@{key}@", escape(value))
+sys.stdout.write(xml)
+PY
      cp "$SRC/transom-setup.ps1" "$SRC/transom-policy.ps1" "$a/"
      xorriso -as mkisofs -quiet -J -r -V TRANSOM_ANSWER -o "$VM/answer.iso" "$a"
      rm -rf "$a")
@@ -288,14 +336,18 @@ run)
     ;;
 shot)
     out=$(realpath -m "${3:?FILE.png}")
-    qmp "{\"execute\":\"screendump\",\"arguments\":{\"filename\":\"$out\",\"format\":\"png\"}}" >/dev/null
+    # json.dumps: a quote or backslash in the path stays inside the JSON string.
+    qmp "$(python3 -I -c 'import json, sys
+print(json.dumps({"execute": "screendump", "arguments": {"filename": sys.argv[1], "format": "png"}}))' "$out")" >/dev/null
     echo "$out"
     ;;
 info) info ;;
 exec) running || { echo "not running" >&2; exit 1; }; guest_ps "${3:?PowerShell command}" ;;
 push)
     running || { echo "not running" >&2; exit 1; }
-    guest_ps "New-Item -ItemType Directory -Force -Path (Split-Path '${4:?REMOTE}') | Out-Null"
+    guest_ps "\$user = $(ps_quote "$USER_NAME")
+$STAGING_PS
+New-Item -ItemType Directory -Force -Path (Split-Path $(ps_quote "${4:?REMOTE}")) | Out-Null"
     guest_push "${3:?LOCAL}" "$4"
     ;;
 session-run)
@@ -303,7 +355,10 @@ session-run)
     # guest agent itself runs as SYSTEM in session 0, where hooks and clipboards differ.
     running || { echo "not running" >&2; exit 1; }
     tr=${3:?cmdline}
-    guest_ps "schtasks /Create /F /TN TransomSession /SC ONCE /ST 23:59 /RU $USER_NAME /IT /RL HIGHEST /TR '$tr' | Out-Null
+    # Windows PowerShell 5.1 passes /TR to schtasks without escaping double quotes in
+    # it, so one could split the argument: refuse them (no probe needs them).
+    [[ $tr != *'"'* ]] || { echo "session-run: no double quotes in the command line" >&2; exit 2; }
+    guest_ps "schtasks /Create /F /TN TransomSession /SC ONCE /ST 23:59 /RU $USER_NAME /IT /RL HIGHEST /TR $(ps_quote "$tr") | Out-Null
 schtasks /Run /TN TransomSession"
     ;;
 fingerprint)
