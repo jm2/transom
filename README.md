@@ -165,13 +165,25 @@ scripts/build-macos.sh --dmg    # dist/Transom.app and dist/Transom.dmg
 
 ### Windows
 
-In an MSYS2 CLANG64 (or CLANGARM64) environment with rustup:
+With MSYS2 and rustup installed, in an MSYS2 CLANG64 shell (x64):
 
-```powershell
+```bash
 pacman -S mingw-w64-clang-x86_64-{toolchain,gtk4,libadwaita,freerdp,ffmpeg,adwaita-icon-theme,pkg-config,clang}
 rustup target add x86_64-pc-windows-gnullvm
 pwsh scripts/build-windows.ps1 -InnoSetup    # dist\transom-windows.zip and dist\transom-setup.exe
 ```
+
+or in a CLANGARM64 shell (arm64):
+
+```bash
+pacman -S mingw-w64-clang-aarch64-{toolchain,gtk4,libadwaita,freerdp,ffmpeg,adwaita-icon-theme,pkg-config,clang}
+rustup target add aarch64-pc-windows-gnullvm
+pwsh scripts/build-windows.ps1 -InnoSetup
+```
+
+`-InnoSetup` needs Inno Setup 6 already installed (`choco install innosetup`), or
+`TRANSOM_ISCC` set to the full path of `ISCC.exe`; without it the script stops after
+writing the zip.
 
 More detail, including the platform feature matrix, is in
 [docs/packaging.md](docs/packaging.md).
