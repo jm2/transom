@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Arch Linux / AUR. Sources from scripts/dist.sh (vendored crates: offline build).
 pkgname=transom
-pkgver=0.0.1
+pkgver=0.1.0
 pkgrel=1
 pkgdesc="Sharp remote desktops over RDP (GTK 4, HiDPI-correct)"
 arch=(x86_64 aarch64)

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] — 2026-11-24
+
 The first release.
 
 ### Added
@@ -48,4 +50,5 @@ The first release.
 - Passwords are saved only when you ask (Remember Password is off by default).
 - The Windows installer registers `.rdp` files and `rdp://` links only if you choose to.
 
-[Unreleased]: https://github.com/jm2/transom/commits/main
+[Unreleased]: https://github.com/jm2/transom/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/jm2/transom/releases/tag/v0.1.0

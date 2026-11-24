@@ -13,10 +13,10 @@
 ;   TargetArch        "x64" or "arm64"
 
 #ifndef AppVersion
-  #define AppVersion "0.0.1"
+  #define AppVersion "0.1.0"
 #endif
 #ifndef AppNumericVersion
-  #define AppNumericVersion "0.0.1.0"
+  #define AppNumericVersion "0.1.0.0"
 #endif
 #ifndef SourceDir
   #define SourceDir "..\..\dist\transom-windows"

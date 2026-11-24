@@ -48,6 +48,18 @@
     <mediatype>application/x-rdp</mediatype>
   </provides>
   <releases>
+    <release version="0.1.0" date="2026-11-24">
+      <description>
+        <p>The first release.</p>
+        <ul>
+          <li>Pixel-exact remote desktops at 100%, 125%, 150% and 200% scale</li>
+          <li>Windows and GNOME computers, RD Gateway and Kerberos sign-in</li>
+          <li>Saved connections, .rdp files and rdp:// links</li>
+          <li>Clipboard, audio, microphone, drives, printers, smart cards and USB devices</li>
+          <li>Hardware video decoding on Linux</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.0.1" date="2026-11-21">
       <description><p>First development snapshot.</p></description>
     </release>
