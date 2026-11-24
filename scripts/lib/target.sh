@@ -4,7 +4,7 @@
 #   T_ADDR  host:port            T_USER  user name
 #   T_PW    password file (host)  T_FP    SHA-256 certificate fingerprint
 #   T_KIND  grd | windows
-STATE="${TMPDIR:-/var/tmp}/transom-test"
+source scripts/lib/state.sh
 TARGET=${TARGET:-grd}
 case "$TARGET" in
 grd)
@@ -29,6 +29,5 @@ win11|server)
     ;;
 *) echo "TARGET must be grd, win11 or server" >&2; exit 2 ;;
 esac
-mkdir -p -m 700 "$STATE"
 # Containers get the password through $STATE (mounted at /state).
 install -m 600 "$T_PW" "$STATE/target.pw"

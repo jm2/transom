@@ -39,7 +39,7 @@ embed-resource = "3.0"
 winresource = "0.1"
 
 # Release packages (as Tributary/Balun): `cargo deb -p transom` (Debian 13+ / Ubuntu
-# 25.04+: FreeRDP >= 3.15) and `cargo generate-rpm -p crates/transom`. The distro
+# 25.10+: FreeRDP >= 3.15) and `cargo generate-rpm -p crates/transom`. The distro
 # packages in build-aux/ (RPM spec, PKGBUILD) build from source instead.
 [package.metadata.deb]
 maintainer = "John-Michael Mulesa <jmulesa@gmail.com>"
@@ -66,6 +66,8 @@ assets = [
   ["../../data/icons/hicolor/256x256/apps/io.github.jm2.Transom.png", "usr/share/icons/hicolor/256x256/apps/", "644"],
   ["../../data/icons/hicolor/512x512/apps/io.github.jm2.Transom.png", "usr/share/icons/hicolor/512x512/apps/", "644"],
   ["../../data/icons/hicolor/scalable/apps/io.github.jm2.Transom.svg", "usr/share/icons/hicolor/scalable/apps/", "644"],
+  # The compiled-in Rust crates' licences (COPYING becomes usr/share/doc/transom/copyright).
+  ["../../build-aux/packaging/RUST-CRATE-LICENSES.txt", "usr/share/doc/transom/", "644"],
 ]
 
 [package.metadata.generate-rpm]
@@ -84,7 +86,8 @@ assets = [
   { source = "../../data/icons/hicolor/256x256/apps/io.github.jm2.Transom.png", dest = "/usr/share/icons/hicolor/256x256/apps/io.github.jm2.Transom.png", mode = "0644" },
   { source = "../../data/icons/hicolor/512x512/apps/io.github.jm2.Transom.png", dest = "/usr/share/icons/hicolor/512x512/apps/io.github.jm2.Transom.png", mode = "0644" },
   { source = "../../data/icons/hicolor/scalable/apps/io.github.jm2.Transom.svg", dest = "/usr/share/icons/hicolor/scalable/apps/io.github.jm2.Transom.svg", mode = "0644" },
-  { source = "../../COPYING", dest = "/usr/share/licenses/transom/COPYING", mode = "0644", doc = true },
+  { source = "../../COPYING", dest = "/usr/share/licenses/transom/COPYING", mode = "0644" },
+  { source = "../../build-aux/packaging/RUST-CRATE-LICENSES.txt", dest = "/usr/share/licenses/transom/RUST-CRATE-LICENSES.txt", mode = "0644" },
 ]
 
 [package.metadata.generate-rpm.requires]

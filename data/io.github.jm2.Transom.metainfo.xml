@@ -25,6 +25,16 @@
   <launchable type="desktop-id">io.github.jm2.Transom.desktop</launchable>
   <url type="homepage">https://github.com/jm2/transom</url>
   <url type="bugtracker">https://github.com/jm2/transom/issues</url>
+  <screenshots>
+    <screenshot type="default">
+      <caption>A Windows 11 session</caption>
+      <image>https://raw.githubusercontent.com/jm2/transom/main/data/screenshots/transom-session.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Saved connections</caption>
+      <image>https://raw.githubusercontent.com/jm2/transom/main/data/screenshots/transom-connections.png</image>
+    </screenshot>
+  </screenshots>
   <content_rating type="oars-1.1"/>
   <supports>
     <control>pointing</control>

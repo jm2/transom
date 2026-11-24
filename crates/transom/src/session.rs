@@ -77,7 +77,8 @@ impl Session {
 
     pub fn set_page(&self, page: &adw::TabPage) {
         page.set_title(&self.profile.borrow().display_name());
-        page.set_tooltip(&self.profile.borrow().address());
+        // Tooltips are markup; the address can come from a file or link.
+        page.set_tooltip(&glib::markup_escape_text(&self.profile.borrow().address()));
         *self.page.borrow_mut() = Some(page.clone());
     }
 
@@ -127,7 +128,14 @@ impl Session {
                 let host = s.profile.borrow().gateway.as_ref().map(|g| g.host.clone());
                 format!("the RD Gateway {}", host.unwrap_or_default())
             } else {
-                s.profile.borrow().display_name()
+                // Name the actual host: a file's name is whatever its sender chose.
+                let p = s.profile.borrow();
+                let (name, addr) = (p.display_name(), p.address());
+                if name == addr || name == p.host {
+                    addr
+                } else {
+                    format!("{name} ({addr})")
+                }
             };
             let s2 = s.clone();
             let failed = s.auth_failures.get() > 0;
@@ -143,8 +151,12 @@ impl Session {
                 failed,
                 move |entered| match entered {
                     Some(c) => {
-                        if c.remember {
-                            *s2.pending_remember.borrow_mut() = Some(c.password.clone());
+                        // Only the latest server answer counts: an earlier "remember"
+                        // must not save a password typed later with it turned off. A
+                        // gateway answer (never remembered) leaves it alone.
+                        if !gateway {
+                            *s2.pending_remember.borrow_mut() =
+                                c.remember.then(|| c.password.clone());
                         }
                         let mut p = s2.profile.borrow_mut();
                         if gateway {
@@ -180,6 +192,23 @@ impl Session {
         });
 
         let weak = Rc::downgrade(self);
+        let notice_weak = weak.clone();
+        self.view.connect_notice(move |view, text| {
+            let Some(s) = notice_weak.upgrade() else {
+                return;
+            };
+            // The window's toast overlay wraps every session, so name this one: the
+            // notice may arrive while another tab is selected.
+            if let Some(toasts) = view
+                .ancestor(adw::ToastOverlay::static_type())
+                .and_downcast::<adw::ToastOverlay>()
+            {
+                let text = format!("{}: {text}", s.profile.borrow().display_name());
+                let toast = adw::Toast::new(&glib::markup_escape_text(&text));
+                toast.set_timeout(0); // stays until dismissed
+                toasts.add_toast(toast);
+            }
+        });
         self.view.connect_disconnected(move |_, reason| {
             let Some(s) = weak.upgrade() else { return };
             s.set_loading(false);

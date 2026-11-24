@@ -44,7 +44,7 @@ pub(crate) fn available() -> bool {
         unsafe {
             av::av_log_set_level(av::AV_LOG_ERROR as c_int);
         }
-        let ok = match H264Decoder::new() {
+        let ok = match H264Decoder::new(1920 * 1080) {
             Ok(_) => true,
             Err(e) => {
                 tracing::info!("hardware H.264 decoding unavailable: {e}");
@@ -78,11 +78,18 @@ impl std::fmt::Debug for H264Decoder {
 }
 
 unsafe extern "C" fn get_format(
-    _ctx: *mut av::AVCodecContext,
+    ctx: *mut av::AVCodecContext,
     mut fmts: *const av::AVPixelFormat,
 ) -> av::AVPixelFormat {
-    // SAFETY: libavcodec passes a list terminated by AV_PIX_FMT_NONE.
+    // SAFETY: libavcodec passes its context and a list terminated by AV_PIX_FMT_NONE.
     unsafe {
+        // The hardware frame pool is sized by the coded picture, which libavcodec's
+        // own `max_pixels` check doesn't cover (it checks the cropped size, and only
+        // later): a small surface must not get pictures coded far larger.
+        let coded = i64::from((*ctx).coded_width) * i64::from((*ctx).coded_height);
+        if (*ctx).max_pixels > 0 && coded > (*ctx).max_pixels {
+            return av::AV_PIX_FMT_NONE;
+        }
         while *fmts != av::AV_PIX_FMT_NONE {
             if *fmts == av::AV_PIX_FMT_VAAPI {
                 return av::AV_PIX_FMT_VAAPI;
@@ -95,7 +102,9 @@ unsafe extern "C" fn get_format(
 }
 
 impl H264Decoder {
-    pub(crate) fn new() -> Result<Self, String> {
+    /// `max_pixels`: the largest picture (width × height) the stream may declare; a
+    /// bigger one is refused instead of allocating its frame pool.
+    pub(crate) fn new(max_pixels: i64) -> Result<Self, String> {
         // SAFETY: libavcodec API used as documented; every allocation is checked and
         // owned by the returned value (freed in Drop) or freed on the error paths.
         unsafe {
@@ -142,6 +151,7 @@ impl H264Decoder {
             (*ctx).flags |= av::AV_CODEC_FLAG_LOW_DELAY as c_int;
             (*ctx).thread_count = 1;
             (*ctx).extra_hw_frames = 8;
+            (*ctx).max_pixels = max_pixels;
             let me = Self {
                 ctx,
                 pkt: av::av_packet_alloc(),

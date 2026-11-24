@@ -1,20 +1,55 @@
-Transom bundles the following third-party components in its macOS and Windows
-packages (Linux packages use the system's copies). Their licences apply to them;
-Transom itself is GPL-3.0-or-later and the transom-view libraries Apache-2.0.
+Transom third-party notices
+===========================
+
+Transom is free software: you can redistribute it and/or modify it under the
+terms of the GNU General Public License, version 3 or (at your option) any
+later version (COPYING). The transom-view libraries it is built from are under
+the Apache License 2.0.
+
+Rust crates
+-----------
+The Rust crates compiled into transom (MIT, Apache-2.0 and others) are listed,
+with their licence texts and copyright notices, in RUST-CRATE-LICENSES.txt,
+next to this file.
+
+Bundled libraries
+-----------------
+The macOS and Windows packages also bundle native libraries built by Homebrew
+(macOS) or MSYS2 (Windows); Linux packages use the system's copies. Their own
+licences apply to them. The main ones:
 
 - GTK 4, GLib, Pango, Cairo, HarfBuzz, GDK-Pixbuf, libadwaita, librsvg:
   LGPL-2.1-or-later (HarfBuzz: MIT; Cairo: LGPL-2.1 or MPL-1.1)
 - FreeRDP and WinPR 3 (https://www.freerdp.com): Apache-2.0
-- FFmpeg libavcodec/libavutil (https://ffmpeg.org): LGPL-2.1-or-later, dynamically
-  linked; the bundled build's configuration determines the exact licence
+- FFmpeg libavcodec/libavutil (https://ffmpeg.org), dynamically linked, and the
+  codec libraries it uses: MSYS2 and Homebrew enable FFmpeg's GPL parts, so the
+  bundled build is under the GNU GPL, which Transom's licence accommodates
 - OpenSSL 3: Apache-2.0
 - libusb: LGPL-2.1-or-later
 - Adwaita icon theme: LGPL-3.0 or CC-BY-SA-3.0
-- Rust crates compiled into transom: see the licence list produced by
-  `cargo deny list` / the crates' own LICENSE files (MIT, Apache-2.0, and others
-  allowed by deny.toml)
 
-Source code for the LGPL components is available from the projects above, or
-from the MSYS2 (Windows) and Homebrew (macOS) package sources the bundle was
-built from; on request the exact versions used are listed in the bundle's
-build log.
+BUNDLED-PACKAGES.txt, next to this file, lists every MSYS2 or Homebrew package
+the build bundled, with its exact version, the licence its packager declares,
+where its source is, and what it provided. The licence files those packages
+ship are copied into licenses/.
+
+Source code
+-----------
+The packagers publish the exact source of each bundled package:
+
+- Windows: MSYS2's source package for that version (the "Source" line in
+  BUNDLED-PACKAGES.txt, in https://repo.msys2.org/mingw/sources/) holds the
+  upstream source with MSYS2's build recipe and patches; the recipes are also
+  at https://github.com/msys2/MINGW-packages.
+- macOS: the upstream release the "Source" line names, built with Homebrew's
+  formula for that version (the "Formula" line; the recipes are at
+  https://github.com/Homebrew/homebrew-core, and the line gives the
+  homebrew-core commit where the keg records it).
+
+For at least three years after each release, the Transom maintainers will also
+provide the complete corresponding source code of any GPL- or LGPL-licensed
+component in that release's packages on request at
+https://github.com/jm2/transom/issues, for no more than the cost of physically
+performing the source distribution. Transom's own source code is at
+https://github.com/jm2/transom (each release has a tag; Cargo.lock pins the
+crates it is built from).

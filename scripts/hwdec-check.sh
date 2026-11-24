@@ -14,7 +14,7 @@
 # Needs scripts/test-servers.sh up and a VA-API GPU with H.264 decode.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-STATE="${TMPDIR:-/var/tmp}/transom-test"
+source scripts/lib/state.sh
 RENDER=${RENDER:-/dev/dri/renderD128}
 [[ -e $RENDER ]] || { echo "no GPU render node ($RENDER)" >&2; exit 2; }
 [[ -f $STATE/xrdp.pw ]] || { echo "run scripts/test-servers.sh up first" >&2; exit 2; }

@@ -45,4 +45,6 @@ package() {
   done
   install -Dm644 COPYING "$pkgdir/usr/share/licenses/$pkgname/COPYING"
   install -Dm644 LICENSE-APACHE "$pkgdir/usr/share/licenses/$pkgname/LICENSE-APACHE"
+  install -Dm644 build-aux/packaging/RUST-CRATE-LICENSES.txt \
+    "$pkgdir/usr/share/licenses/$pkgname/RUST-CRATE-LICENSES.txt"
 }

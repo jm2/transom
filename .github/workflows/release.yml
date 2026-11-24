@@ -127,7 +127,9 @@ jobs:
         with:
           bundle: transom-linux-${{ matrix.arch }}.flatpak
           manifest-path: build-aux/flatpak/io.github.jm2.Transom.yml
-          cache-key: flatpak-${{ matrix.arch }}-${{ hashFiles('build-aux/flatpak/*', 'Cargo.lock') }}
+          # Hermetic release builds: no flatpak-builder state from earlier runs.
+          cache: false
+          restore-cache: false
           arch: ${{ matrix.arch }}
           upload-artifact: false
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -188,6 +190,8 @@ jobs:
           msystem: ${{ matrix.msystem }}
           path-type: inherit
           update: true
+          # Hermetic release builds: fresh packages, no cache from earlier runs.
+          cache: false
           install: >-
             ${{ matrix.pkg_prefix }}-gtk4 ${{ matrix.pkg_prefix }}-libadwaita
             ${{ matrix.pkg_prefix }}-freerdp ${{ matrix.pkg_prefix }}-ffmpeg

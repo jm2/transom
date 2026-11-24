@@ -25,10 +25,15 @@ done
 info() { echo "==> $*"; }
 fail() { echo "build-macos: $*" >&2; exit 1; }
 [[ $(uname) == Darwin ]] || fail "run this on macOS"
-for t in brew otool install_name_tool codesign iconutil; do
+for t in brew otool install_name_tool codesign iconutil realpath; do
     command -v "$t" >/dev/null || fail "$t not found"
 done
 BREW=$(brew --prefix)
+# Scratch space; $work/binaries lists each bundled binary's Homebrew source and its
+# place in the bundle (for BUNDLED-PACKAGES.txt).
+work=$(mktemp -d "${TMPDIR:-/var/tmp}/transom-macos.XXXXXX")
+trap 'rm -rf "$work"' EXIT
+: > "$work/binaries"
 export PKG_CONFIG_PATH="$BREW/lib/pkgconfig"
 export LIBCLANG_PATH="$BREW/opt/llvm/lib"   # bindgen
 TARGET=${CARGO_BUILD_TARGET:-aarch64-apple-darwin}
@@ -46,6 +51,7 @@ C=$APP/Contents
 rm -rf "$APP"; mkdir -p "$C/MacOS" "$C/Frameworks" "$C/Resources/share" "$C/Resources/lib"
 cp "$BIN_SRC" "$C/MacOS/transom-bin"
 cp "$BREW/bin/gdk-pixbuf-query-loaders" "$C/MacOS/"
+printf '%s\t%s\n' "$BREW/bin/gdk-pixbuf-query-loaders" MacOS/gdk-pixbuf-query-loaders >> "$work/binaries"
 
 # ---- resources: icons, schemas, pixbuf loaders ----
 mkdir -p "$C/Resources/share/icons" "$C/Resources/share/glib-2.0/schemas"
@@ -61,7 +67,8 @@ for d in "$C"/Resources/lib/gdk-pixbuf-2.0/2.10.0/loaders/*.dylib; do
     [[ -f ${d%.dylib}.so ]] && rm -f "$d"
 done
 iconutil -c icns data/transom.iconset -o "$C/Resources/transom.icns"
-cp COPYING build-aux/packaging/THIRD-PARTY-NOTICES.txt "$C/Resources/"
+cp COPYING build-aux/packaging/THIRD-PARTY-NOTICES.txt build-aux/packaging/RUST-CRATE-LICENSES.txt \
+    "$C/Resources/"
 
 # ---- dylib closure ----
 info "bundling dylibs"
@@ -88,6 +95,7 @@ process() { # BIN: copy its non-system dependencies, rewrite references; echo ne
         base=$(basename "$src")
         if [[ ! -f $C/Frameworks/$base ]]; then
             cp -L "$src" "$C/Frameworks/$base"; chmod u+w "$C/Frameworks/$base"
+            printf '%s\t%s\n' "$src" "Frameworks/$base" >> "$work/binaries"
             install_name_tool -id "$fw/$base" "$C/Frameworks/$base" 2>/dev/null
             echo "$C/Frameworks/$base"
         fi
@@ -97,6 +105,10 @@ process() { # BIN: copy its non-system dependencies, rewrite references; echo ne
 queue=("$C/MacOS/transom-bin" "$C/MacOS/gdk-pixbuf-query-loaders")
 while IFS= read -r -d '' l; do
     chmod u+w "$l"; queue+=("$l")
+    # A binary like the dylibs: its source must resolve into a Cellar keg (checked in
+    # write_bundled_packages), not just be skipped by the data-tree scan.
+    rel=${l#"$C/Resources/lib/"}
+    printf '%s\t%s\n' "$BREW/lib/$rel" "Resources/lib/$rel" >> "$work/binaries"
     # Loaders are dlopen()ed by path; give any that carry a Homebrew install name a local one.
     [[ -n $(otool -D "$l" | tail -n +2) ]] && install_name_tool -id "@loader_path/$(basename "$l")" "$l" 2>/dev/null
 done < <(find "$C/Resources/lib/gdk-pixbuf-2.0" \( -name '*.so' -o -name '*.dylib' \) -print0)
@@ -110,6 +122,88 @@ while (( ${#queue[@]} )); do
     (( ++passes < 40 )) || fail "dylib closure didn't converge"
 done
 info "bundled $(ls "$C/Frameworks" | wc -l | tr -d ' ') dylibs"
+
+# ---- bundled Homebrew packages ----
+# Record the formula and exact version (the Cellar keg) behind every bundled file, so
+# each release names the sources THIRD-PARTY-NOTICES.txt points to
+# (Resources/BUNDLED-PACKAGES.txt), and copy the licence files each keg ships
+# (Resources/licenses/). A bundled binary from outside the Cellar fails the build: its
+# source can't be identified.
+keg_field() { # KEY FILE → the first "KEY": "string" value in a keg's JSON file
+    [[ -f $2 ]] || return 0
+    awk -v key="\"$1\"" '{
+        i = index($0, key); if (!i) next
+        s = substr($0, i + length(key))
+        if (sub(/^[ \t]*:[ \t]*"/, "", s) && match(s, /^[^"]*"/)) { print substr(s, 1, RLENGTH - 1); exit }
+    }' "$2"
+}
+write_bundled_packages() { # CELLAR RESOURCES TITLE DATA_TREE...; reads $work/binaries
+    local cellar=$1 res=$2 title=$3 src dest phys rest outside="" tree
+    local formula ver keg license src_url core_rev lic lics files
+    shift 3
+    while IFS=$'\t' read -r src dest; do
+        phys=$(realpath "$src")
+        if [[ $phys == "$cellar"/*/*/* ]]; then
+            rest=${phys#"$cellar"/}
+            formula=${rest%%/*}; rest=${rest#*/}
+            printf '%s/%s\t%s\n' "$formula" "${rest%%/*}" "$dest"
+        else
+            outside+=" $src"
+        fi
+    done < "$work/binaries" > "$work/binary-kegs"
+    [[ -z $outside ]] || fail "bundled binaries from outside Homebrew's Cellar:$outside"
+    # Data trees (icons, schemas, pixbuf loaders): every file or link below them that
+    # resolves into a keg. Broken links and generated caches match none.
+    for tree in "$@"; do
+        [[ -e $tree ]] || continue
+        find "$tree" \( -type f -o -type l \) -exec realpath {} + 2>/dev/null || true
+    done | sed -n "s|^$cellar/\([^/]*\)/\([^/]*\)/.*|\1/\2|p" | sort -u > "$work/data-kegs"
+
+    {
+        printf '%s\n%s\n\n' "$title" "$(printf '%*s' "${#title}" '' | tr ' ' =)"
+        cat <<'TXT'
+Every library, program, loader, icon and schema in Transom.app that Transom does
+not build itself comes from one of the Homebrew formulae below; the version is
+that of the Cellar keg it was copied from. Each entry gives the licence and
+source the keg's SBOM records, the formula (the build recipe, kept in
+https://github.com/Homebrew/homebrew-core), the licence files copied into
+licenses/, and what it provided. See THIRD-PARTY-NOTICES.txt.
+TXT
+        while IFS=/ read -r formula ver; do
+            keg="$cellar/$formula/$ver"
+            # Homebrew records the formula's licence as licenseConcluded.
+            license=$(keg_field licenseConcluded "$keg/sbom.spdx.json")
+            [[ -n $license && $license != NOASSERTION ]] \
+                || license=$(keg_field licenseDeclared "$keg/sbom.spdx.json")
+            [[ -n $license && $license != NOASSERTION ]] || license="not recorded in the keg"
+            src_url=$(keg_field downloadLocation "$keg/sbom.spdx.json")
+            [[ -n $src_url && $src_url != NOASSERTION ]] || src_url="see the formula"
+            core_rev=$(keg_field tap_git_head "$keg/INSTALL_RECEIPT.json")
+            lics=""
+            while IFS= read -r lic; do
+                [[ -n $lic ]] || continue
+                mkdir -p "$res/licenses/$formula"
+                cp "$lic" "$res/licenses/$formula/"
+                lics+="${lics:+, }licenses/$formula/${lic##*/}"
+            done < <(find "$keg" -maxdepth 1 -type f \( -iname 'COPYING*' -o -iname 'LICEN[CS]E*' \
+                         -o -iname 'NOTICE*' -o -iname 'COPYRIGHT*' \) | LC_ALL=C sort)
+            files=$(awk -F'\t' -v k="$formula/$ver" \
+                '$1 == k { printf "%s%s", (n++ ? ", " : ""), $2 }' "$work/binary-kegs")
+            if grep -qxF "$formula/$ver" "$work/data-kegs"; then files+="${files:+, }data files"; fi
+            printf '\n%s %s\n  License: %s\n  Source: %s\n' "$formula" "$ver" "$license" "$src_url"
+            printf '  Formula: https://formulae.brew.sh/formula/%s' "$formula"
+            if [[ $core_rev =~ ^[0-9a-f]{7,40}$ ]]; then printf ' (homebrew-core %s)' "$core_rev"; fi
+            printf '\n  License files: %s\n  Bundled: %s\n' \
+                "${lics:-none shipped by the keg; see its source}" "$files"
+        done < <(sort -u <(cut -f1 "$work/binary-kegs") "$work/data-kegs")
+    } > "$res/BUNDLED-PACKAGES.txt"
+}
+info "recording bundled Homebrew packages"
+CELLAR=$(realpath "$(brew --cellar)")
+write_bundled_packages "$CELLAR" "$C/Resources" "Transom $VERSION for macOS: bundled Homebrew packages" \
+    "$BREW/share/icons/Adwaita" "$BREW/share/icons/hicolor" "$BREW/lib/gdk-pixbuf-2.0" \
+    "$BREW"/share/glib-2.0/schemas/*.xml
+info "recorded $(grep -c '^  Bundled:' "$C/Resources/BUNDLED-PACKAGES.txt") Homebrew formulae in BUNDLED-PACKAGES.txt"
 
 # ---- launcher, Info.plist ----
 cat > "$C/MacOS/Transom" <<'SH'
