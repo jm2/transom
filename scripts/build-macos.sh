@@ -105,6 +105,10 @@ process() { # BIN: copy its non-system dependencies, rewrite references; echo ne
 queue=("$C/MacOS/transom-bin" "$C/MacOS/gdk-pixbuf-query-loaders")
 while IFS= read -r -d '' l; do
     chmod u+w "$l"; queue+=("$l")
+    # A binary like the dylibs: its source must resolve into a Cellar keg (checked in
+    # write_bundled_packages), not just be skipped by the data-tree scan.
+    rel=${l#"$C/Resources/lib/"}
+    printf '%s\t%s\n' "$BREW/lib/$rel" "Resources/lib/$rel" >> "$work/binaries"
     # Loaders are dlopen()ed by path; give any that carry a Homebrew install name a local one.
     [[ -n $(otool -D "$l" | tail -n +2) ]] && install_name_tool -id "@loader_path/$(basename "$l")" "$l" 2>/dev/null
 done < <(find "$C/Resources/lib/gdk-pixbuf-2.0" \( -name '*.so' -o -name '*.dylib' \) -print0)

@@ -117,10 +117,20 @@ Name: "{autodesktop}\Transom"; Filename: "{app}\bin\transom.exe"; Tasks: desktop
 Filename: "{app}\bin\transom.exe"; Description: "Launch Transom"; Flags: nowait postinstall skipifsilent
 
 [Code]
-// [InstallDelete]: an earlier Transom install in this folder.
+var
+  UpgradeKnown, Upgrade: Boolean;
+
+// [InstallDelete]: an earlier Transom install in this folder. Inno evaluates each
+// entry's Check just before that entry, and the first entry deletes bin\transom.exe,
+// so decide once, on the first call (before anything is deleted), and keep the answer.
 function IsTransomUpgrade: Boolean;
 begin
-  Result := FileExists(ExpandConstant('{app}\bin\transom.exe'));
+  if not UpgradeKnown then
+  begin
+    Upgrade := FileExists(ExpandConstant('{app}\bin\transom.exe'));
+    UpgradeKnown := True;
+  end;
+  Result := Upgrade;
 end;
 
 // Delete Software\Classes\rdp (HKA) only if its open command is still Transom's: another
