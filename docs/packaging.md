@@ -29,15 +29,21 @@ script after changing `Cargo.lock`. `scripts/verify.sh` fails while the file is 
 
 | Package | Licence files |
 |---|---|
-| Windows .zip / installer | top of the folder (the install folder): `COPYING.txt`, `THIRD-PARTY-NOTICES.txt`, `RUST-CRATE-LICENSES.txt` |
-| macOS .app | `Transom.app/Contents/Resources/`: `COPYING`, `THIRD-PARTY-NOTICES.txt`, `RUST-CRATE-LICENSES.txt` |
+| Windows .zip / installer | top of the folder (the install folder): `COPYING.txt`, `THIRD-PARTY-NOTICES.txt`, `RUST-CRATE-LICENSES.txt`, `BUNDLED-PACKAGES.txt`, `licenses\` |
+| macOS .app | `Transom.app/Contents/Resources/`: `COPYING`, `THIRD-PARTY-NOTICES.txt`, `RUST-CRATE-LICENSES.txt`, `BUNDLED-PACKAGES.txt`, `licenses/` |
 | .deb | `/usr/share/doc/transom/`: `copyright` (COPYING), `RUST-CRATE-LICENSES.txt` |
 | .rpm (`cargo generate-rpm`) | `/usr/share/licenses/transom/`: `COPYING`, `RUST-CRATE-LICENSES.txt` |
 | RPM spec, Arch | `/usr/share/licenses/transom/`: `COPYING`, `LICENSE-APACHE`, `RUST-CRATE-LICENSES.txt` |
 | Flatpak | `/app/share/licenses/io.github.jm2.Transom/transom/`: the same three; flatpak-builder puts FreeRDP's and pcsc-lite's beside it |
 
 `THIRD-PARTY-NOTICES.txt` covers the native libraries (GTK, FreeRDP, FFmpeg, …) that only
-the Windows and macOS packages bundle; Linux packages use the system's.
+the Windows and macOS packages bundle; Linux packages use the system's. It carries the
+written source offer and points to `BUNDLED-PACKAGES.txt`, which the bundlers write at
+build time: every MSYS2 package (from pacman's local database) or Homebrew formula (from
+the Cellar keg each file resolves into) the bundle took files from, with its exact
+version, declared licence and source location. The licence files those packages ship go
+to `licenses/`. A bundled DLL, program or dylib that no package owns fails the build, since
+its source could not be named.
 
 ## Feature availability by platform
 

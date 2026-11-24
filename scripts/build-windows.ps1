@@ -120,6 +120,110 @@ Copy-Item (Join-Path $repo 'COPYING') (Join-Path $dist 'COPYING.txt')
 Copy-Item (Join-Path $repo 'build-aux\packaging\THIRD-PARTY-NOTICES.txt') $dist
 Copy-Item (Join-Path $repo 'build-aux\packaging\RUST-CRATE-LICENSES.txt') $dist
 
+# ---- bundled MSYS2 packages ------------------------------------------------------
+# Record the MSYS2 package and exact version behind every bundled file, from pacman's
+# local database, so each release names the sources THIRD-PARTY-NOTICES.txt points to
+# (BUNDLED-PACKAGES.txt), and copy the licence files those packages ship (licenses\).
+# A DLL or EXE that no package owns fails the build: its source can't be identified.
+function Write-BundledPackages([string]$Root, [string]$Msys2Root, [string]$MsysEnv, [string]$Title) {
+    $db = Join-Path $Msys2Root 'var\lib\pacman\local'
+    if (-not (Test-Path $db -PathType Container)) { Fail "MSYS2 package database not found: $db" }
+    $rootFull = (Get-Item -LiteralPath $Root).FullName.TrimEnd('\', '/')
+    # Bundled files by the path pacman records (clang64/bin/x.dll), since the bundle
+    # keeps the prefix layout. Transom's own exe and the top-level licence files aren't
+    # MSYS2's; the app icons in share\icons\hicolor simply match no package.
+    $wanted = @{}
+    foreach ($f in Get-ChildItem -LiteralPath $rootFull -Recurse -File) {
+        $rel = $f.FullName.Substring($rootFull.Length + 1).Replace('\', '/')
+        if ($rel -notlike '*/*' -or $rel -ieq 'bin/transom.exe' -or $rel -like 'licenses/*') { continue }
+        $wanted["$MsysEnv/$rel".ToLowerInvariant()] = $rel
+    }
+    $owned = [System.Collections.Generic.HashSet[string]]::new()
+    $licensePrefix = "$MsysEnv/share/licenses/"
+    $packages = foreach ($pkg in Get-ChildItem -LiteralPath $db -Directory | Sort-Object Name) {
+        $filesPath = Join-Path $pkg.FullName 'files'
+        $descPath = Join-Path $pkg.FullName 'desc'
+        if (-not (Test-Path $filesPath) -or -not (Test-Path $descPath)) { continue }
+        $bundled = [System.Collections.Generic.List[string]]::new()
+        $data = 0
+        $licenseFiles = [System.Collections.Generic.List[string]]::new()
+        foreach ($line in [System.IO.File]::ReadLines($filesPath)) {
+            $key = $line.ToLowerInvariant()
+            if ($wanted.ContainsKey($key)) {
+                $null = $owned.Add($key)
+                if ($key -match '\.(dll|exe)$') { $bundled.Add($wanted[$key]) } else { $data++ }
+            }
+            elseif ($line.StartsWith($licensePrefix, [StringComparison]::OrdinalIgnoreCase) -and
+                    -not $line.EndsWith('/')) {
+                $licenseFiles.Add($line)
+            }
+        }
+        if ($bundled.Count -eq 0 -and $data -eq 0) { continue }
+
+        $desc = @{}
+        $field = $null
+        foreach ($line in [System.IO.File]::ReadLines($descPath)) {
+            if ($line -match '^%([A-Z0-9]+)%$') { $field = $Matches[1]; $desc[$field] = @() }
+            elseif ($line -and $field) { $desc[$field] += $line }
+        }
+        $name = $desc['NAME'][0]
+        $pkgVersion = $desc['VERSION'][0]
+        $base = if ($desc['BASE']) { $desc['BASE'][0] } else { $name }
+        $license = if ($desc['LICENSE']) {
+            @($desc['LICENSE'] | ForEach-Object { $_ -replace '^spdx:\s*', '' }) -join '; '
+        } else { 'not declared by the package' }
+
+        $copied = foreach ($licenseFile in $licenseFiles) {
+            $relative = $licenseFile.Substring($licensePrefix.Length)
+            if ($relative -match '(^|/)\.\.?(/|$)') { Fail "MSYS2 package $name lists licence file $licenseFile" }
+            $dest = Join-Path (Join-Path $rootFull 'licenses') $relative
+            New-Item -ItemType Directory -Force (Split-Path $dest) | Out-Null
+            Copy-Item -LiteralPath (Join-Path $Msys2Root $licenseFile) $dest
+            "licenses/$relative"
+        }
+        if ($data -gt 0) { $bundled.Add("$data data file(s)") }
+        [pscustomobject]@{
+            Name = $name
+            Version = $pkgVersion
+            License = $license
+            Source = "https://repo.msys2.org/mingw/sources/$base-$pkgVersion.src.tar.zst"
+            LicenseFiles = @($copied)
+            Bundled = @($bundled)
+        }
+    }
+    $unowned = @($wanted.Keys | Where-Object { $_ -match '\.(dll|exe)$' -and -not $owned.Contains($_) } |
+        ForEach-Object { $wanted[$_] } | Sort-Object)
+    if ($unowned.Count -gt 0) { Fail "no MSYS2 package owns bundled $($unowned -join ', ')" }
+
+    $lines = [System.Collections.Generic.List[string]]::new()
+    $lines.Add($Title)
+    $lines.Add('=' * $Title.Length)
+    $lines.Add('')
+    $lines.Add('Every DLL, program, loader, icon and schema in this folder that Transom does not')
+    $lines.Add('build itself comes from one of the MSYS2 packages below, as installed when this')
+    $lines.Add('package was built. Each entry gives the exact package version, the licence the')
+    $lines.Add('package declares, its source package (the upstream source with MSYS2''s build')
+    $lines.Add('recipe and patches; https://github.com/msys2/MINGW-packages has the recipes),')
+    $lines.Add('the licence files copied into licenses\, and what it provided. See')
+    $lines.Add('THIRD-PARTY-NOTICES.txt.')
+    foreach ($p in $packages) {
+        $lines.Add('')
+        $lines.Add("$($p.Name) $($p.Version)")
+        $lines.Add("  License: $($p.License)")
+        $lines.Add("  Source: $($p.Source)")
+        if ($p.LicenseFiles.Count -gt 0) { $lines.Add("  License files: $($p.LicenseFiles -join ', ')") }
+        else { $lines.Add('  License files: none shipped by the package; see its source') }
+        $lines.Add("  Bundled: $($p.Bundled -join ', ')")
+    }
+    [System.IO.File]::WriteAllLines((Join-Path $rootFull 'BUNDLED-PACKAGES.txt'), $lines,
+        [System.Text.UTF8Encoding]::new($false))
+    return @($packages).Count
+}
+$version = (Select-String -Path (Join-Path $repo 'Cargo.toml') -Pattern '^version\s*=\s*"([^"]+)"' |
+    Select-Object -First 1).Matches[0].Groups[1].Value
+$count = Write-BundledPackages $dist $Msys2Root $msysEnv "Transom $version for Windows ($msysEnv): bundled MSYS2 packages"
+Info "recorded $count MSYS2 packages in BUNDLED-PACKAGES.txt"
+
 # ---- zip / installer -------------------------------------------------------------
 $zip = Join-Path $repo 'dist\transom-windows.zip'
 if (Test-Path $zip) { Remove-Item -Force $zip }
@@ -132,8 +236,6 @@ if ($InnoSetup) {
         "${env:LOCALAPPDATA}\Programs\Inno Setup 6\ISCC.exe") |
         Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
     if (-not $iscc) { Fail 'Inno Setup 6 (ISCC.exe) not found; choco install innosetup' }
-    $version = (Select-String -Path (Join-Path $repo 'Cargo.toml') -Pattern '^version\s*=\s*"([^"]+)"' |
-        Select-Object -First 1).Matches[0].Groups[1].Value
     # Four-part numeric form for the version resource: "1.2.3-rc1" -> "1.2.3.0".
     $parts = @(($version -split '[-+]')[0] -split '\.')
     while ($parts.Count -lt 4) { $parts += '0' }

@@ -82,10 +82,12 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Name: "rdpfiles"; Description: "Open .rdp files and rdp:// links with Transom"; GroupDescription: "File associations:"
 
 [InstallDelete]
-; Upgrades replace the app-owned tree wholesale (no stale DLLs or loaders).
+; Upgrades replace the app-owned tree wholesale (no stale DLLs, loaders or licence
+; files of packages a newer build no longer bundles).
 Type: filesandordirs; Name: "{app}\bin"
 Type: filesandordirs; Name: "{app}\lib"
 Type: filesandordirs; Name: "{app}\share"
+Type: filesandordirs; Name: "{app}\licenses"
 
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
