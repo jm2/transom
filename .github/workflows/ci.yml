@@ -56,6 +56,37 @@ jobs:
           manifest-path: build-aux/flatpak/io.github.jm2.Transom.yml
           cache-key: flatpak-builder-${{ hashFiles('build-aux/flatpak/*', 'Cargo.lock') }}
 
+  # ── MSRV (minimum supported Rust version), as Tributary/Balun ─────────────
+  # Compile-proof for the `rust-version` in Cargo.toml (ADR 0003). The
+  # toolchain is read from that field, so raising the floor stays a one-line
+  # change. Keep the job name stable: it's a required check.
+  msrv:
+    name: MSRV
+    runs-on: ubuntu-latest
+    # Same image and packages as "Linux (full workspace)".
+    container: registry.fedoraproject.org/fedora:latest
+    steps:
+      - name: Install system dependencies
+        run: >
+          dnf install -y --setopt=install_weak_deps=False
+          git gcc clang-devel pkgconf-pkg-config rustup python3
+          freerdp-devel libwinpr-devel gtk4-devel libadwaita-devel libsecret-devel
+          libavcodec-free-devel libavutil-free-devel
+          gobject-introspection-devel vala mutter dbus-daemon
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Rust (Cargo.toml rust-version)
+        run: |
+          msrv="$(python3 -I -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["rust-version"])')"
+          # rust-version = "1.98" means 1.98.0: check against exactly that release.
+          case "$msrv" in *.*.*) ;; *) msrv="$msrv.0" ;; esac
+          echo "MSRV: $msrv"
+          rustup-init -y --profile minimal --default-toolchain "$msrv"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - name: Check (whole workspace, all targets, locked)
+        run: cargo check --workspace --all-targets --locked
+
   # ── macOS (.app/.dmg, Homebrew GTK + FreeRDP), as Tributary/Balun ──────────
   build-macos:
     name: macOS (aarch64)
