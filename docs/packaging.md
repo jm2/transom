@@ -2,14 +2,17 @@
 
 | Platform | Package | Built by | Notes |
 |---|---|---|---|
-| Linux x86_64, aarch64 | Flatpak (GNOME 51) | `build-aux/flatpak/io.github.jm2.Transom.yml` | Builds its own FreeRDP (with RDPEAR); H.264 from codecs-extra |
-| Fedora 44+ | RPM | `build-aux/rpm/transom.spec` (offline, `scripts/dist.sh` tarballs); Packit → COPR (`.packit.yaml`) | Release workflow also builds an RPM with `cargo generate-rpm` |
-| Debian 13+, Ubuntu 25.10+ | .deb | `cargo deb -p transom` | Needs FreeRDP ≥ 3.15: Debian 12, Ubuntu 24.04 and 25.04 are too old |
-| Arch Linux | pkg.tar.zst | `build-aux/arch/PKGBUILD` (checkout); `build-aux/arch/PKGBUILD.aur` (AUR, release tarball) | |
+| Linux x86_64, aarch64 | Flatpak (GNOME 51) | `build-aux/flatpak/io.github.jm2.Transom.yml` (`scripts/build-linux.sh --flatpak`) | Builds its own FreeRDP (with RDPEAR); H.264 from codecs-extra |
+| Fedora 44+ | RPM | `build-aux/rpm/transom.spec` (offline, `scripts/dist.sh` tarballs); Packit → COPR (`.packit.yaml`) | Release workflow also builds an RPM with `cargo generate-rpm` (`scripts/build-linux.sh --rpm`) |
+| Debian 13+, Ubuntu 25.10+ | .deb | `cargo deb -p transom` (`scripts/build-linux.sh --deb`) | Needs FreeRDP ≥ 3.15: Debian 12, Ubuntu 24.04 and 25.04 are too old |
+| Arch Linux | pkg.tar.zst | `build-aux/arch/PKGBUILD` (committed HEAD, `scripts/build-linux.sh --arch-pkg`); `build-aux/arch/PKGBUILD.aur` (AUR, release tarball) | |
 | macOS 13+ (Apple silicon) | .app / .dmg | `scripts/build-macos.sh --dmg` (Homebrew) | Ad-hoc signed; not notarised yet |
 | Windows 10/11 x64, arm64 | portable .zip, Inno Setup installer | `scripts/build-windows.ps1 [-InnoSetup]` (MSYS2 CLANG64/CLANGARM64) | The installer registers `.rdp` and `rdp://` (optional task, off by default) |
 
-`.github/workflows/release.yml` builds all of these. Run with no tag, it packages the
+The three `scripts/build-*` helpers take the same modes as Tributary's and Balun's
+(`--help` / `-Help` lists them) and check every build dependency before building, naming
+the packages to install for anything missing. `.github/workflows/release.yml` builds all
+of these. Run with no tag, it packages the
 selected branch as a dry run. Run with a release tag, it builds every package from the
 tagged source, writes `SHA256SUMS.txt` over the exact asset list, attests build provenance
 (`gh attestation verify <file> --repo jm2/transom --signer-workflow
