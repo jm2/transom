@@ -50,9 +50,11 @@ struct Orig {
     end_frame: ffi::pcRdpgfxEndFrame,
 }
 
-/// Most region rectangles taken from one AVC420 command, and kept per surface: past
-/// these, that surface falls back to software (the server controls both counts, and
-/// region bookkeeping and rendering cost grow with them).
+/// Most region rectangles taken from one AVC420 command, and kept per surface (the
+/// server controls both counts, and region bookkeeping and rendering cost grow with
+/// them). Past these, the video pixels go to the framebuffer instead (`flatten`): the
+/// hardware decoder keeps decoding, since a software decoder taking over mid-stream
+/// would lack the stream's parameter sets and reference frames until the next IDR.
 const MAX_COMMAND_RECTS: usize = 64;
 const MAX_SURFACE_RECTS: usize = 256;
 /// Hardware decoders (one VA-API device and frame pool each) per session; further
@@ -332,9 +334,9 @@ unsafe fn with_hooks<R>(
 }
 
 impl Hooks {
-    /// Copy the video pixels of `region` (surface coordinates) back into surface
-    /// `id`'s memory and take them out of its video region.
-    unsafe fn read_back(&mut self, gfx: *mut ffi::RdpgfxClientContext, id: u16, area: &Region) {
+    /// Copy the video pixels of `area` (surface coordinates, may overlap) back into
+    /// surface `id`'s memory and take them out of its video region.
+    unsafe fn read_back(&mut self, gfx: *mut ffi::RdpgfxClientContext, id: u16, area: &[Rect]) {
         if area.is_empty() {
             return;
         }
@@ -365,7 +367,7 @@ impl Hooks {
             let len = surf.scanline as usize * surf.height as usize;
             let dst = std::slice::from_raw_parts_mut(surf.data, len);
             let nv12 = s.nv12.as_ref().expect("downloaded");
-            for r in area.rects() {
+            for r in area {
                 let Some(r) = r.intersect(Rect::new(0, 0, surf.width, surf.height)) else {
                     continue;
                 };
@@ -383,6 +385,22 @@ impl Hooks {
             }
         }
         s.dirty = true;
+        // SAFETY: forwarded contract.
+        unsafe { self.bound(gfx, id) };
+    }
+
+    /// Keep surface `id`'s video region within `MAX_SURFACE_RECTS`: a hole cut into it
+    /// splits a rectangle, so repeated writes could fragment it without bound.
+    unsafe fn bound(&mut self, gfx: *mut ffi::RdpgfxClientContext, id: u16) {
+        let over = self
+            .surfaces
+            .get(&id)
+            .is_some_and(|s| s.region.rects().len() > MAX_SURFACE_RECTS);
+        if over {
+            tracing::debug!(surface = id, "video region too fragmented; flattening");
+            // SAFETY: forwarded contract.
+            unsafe { self.flatten(gfx, id) };
+        }
     }
 
     /// Before a command writes `r` of surface `id`: copy back the video pixels inside
@@ -404,10 +422,28 @@ impl Hooks {
         if partial {
             let area = s.region.intersect_rect(r);
             // SAFETY: forwarded contract.
-            unsafe { self.read_back(gfx, id, &area) };
+            unsafe { self.read_back(gfx, id, area.rects()) };
         }
+        let Some(s) = self.surfaces.get_mut(&id) else {
+            return;
+        };
+        s.region.subtract_rect(r);
+        s.dirty = true;
+        // SAFETY: forwarded contract.
+        unsafe { self.bound(gfx, id) };
+    }
+
+    /// Copy surface `id`'s whole video region into its memory and empty the region.
+    /// The surface keeps its hardware decoder: later frames start a new region.
+    unsafe fn flatten(&mut self, gfx: *mut ffi::RdpgfxClientContext, id: u16) {
+        let area = match self.surfaces.get(&id) {
+            Some(s) => s.region.clone(),
+            None => return,
+        };
+        // SAFETY: forwarded contract.
+        unsafe { self.read_back(gfx, id, area.rects()) };
         if let Some(s) = self.surfaces.get_mut(&id) {
-            s.region.subtract_rect(r);
+            s.region = Region::new();
             s.dirty = true;
         }
     }
@@ -420,7 +456,7 @@ impl Hooks {
             None => return,
         };
         // SAFETY: forwarded contract.
-        unsafe { self.read_back(gfx, id, &area) };
+        unsafe { self.read_back(gfx, id, area.rects()) };
         if let Some(s) = self.surfaces.get_mut(&id) {
             s.software = true;
             s.decoder = None;
@@ -502,11 +538,6 @@ unsafe extern "C" fn surface_command(
             } else {
                 bs.meta.numRegionRects as usize
             };
-            if n > MAX_COMMAND_RECTS {
-                tracing::warn!(surface = id, rects = n, "too many video region rectangles");
-                h.fall_back_to_software(gfx, id);
-                return Next::Software;
-            }
             let (sw, sh) = h.surfaces.get(&id).map_or((0, 0), |s| s.size);
             // Clipped to the surface: FreeRDP checks only that each is well formed.
             let rects: Vec<Rect> = if n == 0 {
@@ -544,14 +575,24 @@ unsafe extern "C" fn surface_command(
                     let frame = Arc::new(frame);
                     s.frame = Some(frame.clone());
                     s.nv12 = None;
-                    for r in &rects {
-                        s.region.union_rect(*r);
+                    if rects.len() > MAX_COMMAND_RECTS {
+                        // Too many to track: this frame goes to the framebuffer, as
+                        // FreeRDP's decoder would put it (the earlier region from the
+                        // same frame first, then the command's rectangles).
+                        tracing::debug!(
+                            surface = id,
+                            rects = n,
+                            "many video rectangles; flattening"
+                        );
+                        h.flatten(gfx, id);
+                        h.read_back(gfx, id, &rects);
+                    } else {
+                        for r in &rects {
+                            s.region.union_rect(*r);
+                        }
+                        h.bound(gfx, id);
                     }
-                    if s.region.rects().len() > MAX_SURFACE_RECTS {
-                        tracing::warn!(surface = id, "video region too fragmented");
-                        h.fall_back_to_software(gfx, id);
-                        return Next::Software;
-                    }
+                    let s = h.surfaces.get_mut(&id).expect("checked");
                     s.new_frame = true;
                     s.dirty = true;
                     h.stats.frames += 1;
@@ -706,7 +747,7 @@ unsafe extern "C" fn surface_to_surface(
         let orig = with_hooks(gfx, |h| {
             if let Some(s) = h.surfaces.get(&p.surfaceIdSrc) {
                 let area = s.region.intersect_rect(src);
-                h.read_back(gfx, p.surfaceIdSrc, &area);
+                h.read_back(gfx, p.surfaceIdSrc, area.rects());
             }
             for pt in pts {
                 let d = Rect::new(pt.x as u32, pt.y as u32, src.width, src.height);
@@ -731,7 +772,7 @@ unsafe extern "C" fn surface_to_cache(
         let orig = with_hooks(gfx, |h| {
             if let Some(s) = h.surfaces.get(&p.surfaceId) {
                 let area = s.region.intersect_rect(src);
-                h.read_back(gfx, p.surfaceId, &area);
+                h.read_back(gfx, p.surfaceId, area.rects());
             }
         });
         match orig {

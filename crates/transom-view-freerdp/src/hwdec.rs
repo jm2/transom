@@ -78,11 +78,18 @@ impl std::fmt::Debug for H264Decoder {
 }
 
 unsafe extern "C" fn get_format(
-    _ctx: *mut av::AVCodecContext,
+    ctx: *mut av::AVCodecContext,
     mut fmts: *const av::AVPixelFormat,
 ) -> av::AVPixelFormat {
-    // SAFETY: libavcodec passes a list terminated by AV_PIX_FMT_NONE.
+    // SAFETY: libavcodec passes its context and a list terminated by AV_PIX_FMT_NONE.
     unsafe {
+        // The hardware frame pool is sized by the coded picture, which libavcodec's
+        // own `max_pixels` check doesn't cover (it checks the cropped size, and only
+        // later): a small surface must not get pictures coded far larger.
+        let coded = i64::from((*ctx).coded_width) * i64::from((*ctx).coded_height);
+        if (*ctx).max_pixels > 0 && coded > (*ctx).max_pixels {
+            return av::AV_PIX_FMT_NONE;
+        }
         while *fmts != av::AV_PIX_FMT_NONE {
             if *fmts == av::AV_PIX_FMT_VAAPI {
                 return av::AV_PIX_FMT_VAAPI;
