@@ -61,7 +61,8 @@ for d in "$C"/Resources/lib/gdk-pixbuf-2.0/2.10.0/loaders/*.dylib; do
     [[ -f ${d%.dylib}.so ]] && rm -f "$d"
 done
 iconutil -c icns data/transom.iconset -o "$C/Resources/transom.icns"
-cp COPYING build-aux/packaging/THIRD-PARTY-NOTICES.txt "$C/Resources/"
+cp COPYING build-aux/packaging/THIRD-PARTY-NOTICES.txt build-aux/packaging/RUST-CRATE-LICENSES.txt \
+    "$C/Resources/"
 
 # ---- dylib closure ----
 info "bundling dylibs"

@@ -66,6 +66,8 @@ assets = [
   ["../../data/icons/hicolor/256x256/apps/io.github.jm2.Transom.png", "usr/share/icons/hicolor/256x256/apps/", "644"],
   ["../../data/icons/hicolor/512x512/apps/io.github.jm2.Transom.png", "usr/share/icons/hicolor/512x512/apps/", "644"],
   ["../../data/icons/hicolor/scalable/apps/io.github.jm2.Transom.svg", "usr/share/icons/hicolor/scalable/apps/", "644"],
+  # The compiled-in Rust crates' licences (COPYING becomes usr/share/doc/transom/copyright).
+  ["../../build-aux/packaging/RUST-CRATE-LICENSES.txt", "usr/share/doc/transom/", "644"],
 ]
 
 [package.metadata.generate-rpm]
@@ -85,6 +87,7 @@ assets = [
   { source = "../../data/icons/hicolor/512x512/apps/io.github.jm2.Transom.png", dest = "/usr/share/icons/hicolor/512x512/apps/io.github.jm2.Transom.png", mode = "0644" },
   { source = "../../data/icons/hicolor/scalable/apps/io.github.jm2.Transom.svg", dest = "/usr/share/icons/hicolor/scalable/apps/io.github.jm2.Transom.svg", mode = "0644" },
   { source = "../../COPYING", dest = "/usr/share/licenses/transom/COPYING", mode = "0644", doc = true },
+  { source = "../../build-aux/packaging/RUST-CRATE-LICENSES.txt", dest = "/usr/share/licenses/transom/RUST-CRATE-LICENSES.txt", mode = "0644", doc = true },
 ]
 
 [package.metadata.generate-rpm.requires]

@@ -10,9 +10,9 @@ Transom itself is GPL-3.0-or-later and the transom-view libraries Apache-2.0.
 - OpenSSL 3: Apache-2.0
 - libusb: LGPL-2.1-or-later
 - Adwaita icon theme: LGPL-3.0 or CC-BY-SA-3.0
-- Rust crates compiled into transom: see the licence list produced by
-  `cargo deny list` / the crates' own LICENSE files (MIT, Apache-2.0, and others
-  allowed by deny.toml)
+- Rust crates compiled into transom (MIT, Apache-2.0 and others): their
+  licence texts and copyright notices are in RUST-CRATE-LICENSES.txt, next to
+  this file
 
 Source code for the LGPL components is available from the projects above, or
 from the MSYS2 (Windows) and Homebrew (macOS) package sources the bundle was

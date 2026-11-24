@@ -14,6 +14,31 @@
 (`gh attestation verify <file> --repo jm2/transom`), and attaches everything to the
 GitHub release.
 
+## Licence notices
+
+Every package carries Transom's licence (`COPYING`) and
+`RUST-CRATE-LICENSES.txt`: the licence texts and copyright notices of the Rust crates
+compiled into the binary, the transom-view libraries' Apache-2.0 among them.
+`scripts/gen-licenses.sh` writes it to `build-aux/packaging/` with
+[cargo-about](https://github.com/EmbarkStudios/cargo-about) (`about.toml`, template
+`build-aux/packaging/about.hbs`), over the union of the shipped targets. The file is
+committed, so the offline builds (Flatpak, RPM spec, Arch) need no extra tool: rerun the
+script after changing `Cargo.lock`. `scripts/verify.sh` fails while the file is stale
+(CI installs cargo-about 0.9.3; locally,
+`cargo install --locked cargo-about --version 0.9.3 --features cli`).
+
+| Package | Licence files |
+|---|---|
+| Windows .zip / installer | top of the folder (the install folder): `COPYING.txt`, `THIRD-PARTY-NOTICES.txt`, `RUST-CRATE-LICENSES.txt` |
+| macOS .app | `Transom.app/Contents/Resources/`: `COPYING`, `THIRD-PARTY-NOTICES.txt`, `RUST-CRATE-LICENSES.txt` |
+| .deb | `/usr/share/doc/transom/`: `copyright` (COPYING), `RUST-CRATE-LICENSES.txt` |
+| .rpm (`cargo generate-rpm`) | `/usr/share/licenses/transom/`: `COPYING`, `RUST-CRATE-LICENSES.txt` |
+| RPM spec, Arch | `/usr/share/licenses/transom/`: `COPYING`, `LICENSE-APACHE`, `RUST-CRATE-LICENSES.txt` |
+| Flatpak | `/app/share/licenses/io.github.jm2.Transom/transom/`: the same three; flatpak-builder puts FreeRDP's and pcsc-lite's beside it |
+
+`THIRD-PARTY-NOTICES.txt` covers the native libraries (GTK, FreeRDP, FFmpeg, …) that only
+the Windows and macOS packages bundle; Linux packages use the system's.
+
 ## Feature availability by platform
 
 | Feature | Linux | macOS | Windows |

@@ -11,8 +11,8 @@
 #   pwsh scripts/build-windows.ps1 [-Msys2Root C:\msys64] [-NoCargoBuild] [-InnoSetup]
 #
 # Environment: RUST_TARGET (default from the host arch), MSYS_ENV (clang64|clangarm64).
-# Output: dist\transom-windows\ (bin\transom.exe + DLLs, share\, lib\),
-# dist\transom-windows.zip, and with -InnoSetup dist\transom-setup.exe.
+# Output: dist\transom-windows\ (bin\transom.exe + DLLs, share\, lib\, and the licence
+# files at the top), dist\transom-windows.zip, and with -InnoSetup dist\transom-setup.exe.
 #
 # The layout keeps MSYS2's prefix shape, so GLib/GTK find share\ and lib\ from their
 # own DLL location; nothing sets environment variables at run time. DLLs are found
@@ -114,8 +114,11 @@ Copy-Item (Join-Path $prefix 'share\glib-2.0\schemas\*.xml') (Join-Path $share '
 & (Join-Path $prefixBin 'glib-compile-schemas.exe') (Join-Path $share 'glib-2.0\schemas')
 if ($LASTEXITCODE -ne 0) { Fail 'glib-compile-schemas failed' }
 
+# Licences: Transom's, the bundled native libraries' and the Rust crates' (the
+# installer copies the whole tree, so they land in the install folder too).
 Copy-Item (Join-Path $repo 'COPYING') (Join-Path $dist 'COPYING.txt')
 Copy-Item (Join-Path $repo 'build-aux\packaging\THIRD-PARTY-NOTICES.txt') $dist
+Copy-Item (Join-Path $repo 'build-aux\packaging\RUST-CRATE-LICENSES.txt') $dist
 
 # ---- zip / installer -------------------------------------------------------------
 $zip = Join-Path $repo 'dist\transom-windows.zip'
