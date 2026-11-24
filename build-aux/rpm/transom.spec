@@ -5,7 +5,7 @@ Version:        0.0.1
 Release:        1%{?dist}
 Summary:        Sharp remote desktops over RDP
 # App GPL-3.0-or-later; the bundled transom-view libraries Apache-2.0; vendored crates
-# under various permissive licences (see vendor/).
+# under various permissive licences (build-aux/packaging/RUST-CRATE-LICENSES.txt).
 License:        GPL-3.0-or-later AND Apache-2.0 AND MIT AND (MIT OR Apache-2.0)
 URL:            https://github.com/jm2/transom
 Source0:        %{name}-%{version}.tar.gz
@@ -65,7 +65,7 @@ export RUSTFLAGS="%{?build_rustflags}"
 cargo test --release --locked --offline -p transom-view-core
 
 %files
-%license COPYING LICENSE-APACHE
+%license COPYING LICENSE-APACHE build-aux/packaging/RUST-CRATE-LICENSES.txt
 %doc README.md
 %{_bindir}/transom
 %{_datadir}/applications/io.github.jm2.Transom.desktop

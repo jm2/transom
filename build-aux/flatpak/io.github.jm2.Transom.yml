@@ -132,6 +132,13 @@ modules:
       - install -Dm644 data/io.github.jm2.Transom.metainfo.xml /app/share/metainfo/io.github.jm2.Transom.metainfo.xml
       - install -Dm644 data/io.github.jm2.Transom.mime.xml /app/share/mime/packages/io.github.jm2.Transom.xml
       - for icon in data/icons/hicolor/*/apps/io.github.jm2.Transom.*; do install -Dm644 "$icon" "/app/share/${icon#data/}"; done
+    # flatpak-builder installs these to /app/share/licenses/io.github.jm2.Transom/transom/.
+    # Listing them replaces its COPYING*/LICEN* detection, so Transom's own are named
+    # too; the pcsc-lite and FreeRDP modules keep the detected ones.
+    license-files:
+      - COPYING
+      - LICENSE-APACHE
+      - build-aux/packaging/RUST-CRATE-LICENSES.txt
     sources:
       - type: dir
         path: ../..

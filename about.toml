@@ -1,0 +1,58 @@
+# cargo-about configuration: the licences of the Rust crates compiled into the
+# transom app, written to build-aux/packaging/RUST-CRATE-LICENSES.txt by
+# scripts/gen-licenses.sh (template: build-aux/packaging/about.hbs). Every binary
+# package ships that file; scripts/verify.sh checks that it matches Cargo.lock.
+
+# Licences we accept, in the order cargo-about picks from an "A OR B" choice: MIT
+# first (a notice, no NOTICE-file duty), then the rest of deny.toml's `allow` list.
+# GPL-3.0-or-later is for the GPL workspace crates (transom, transom-macos) only;
+# deny.toml enforces that.
+accepted = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "BSL-1.0",
+    "CC0-1.0",
+    "Unlicense",
+    "MPL-2.0",
+    "LGPL-2.1-or-later",
+    "GPL-3.0-or-later",
+]
+
+# One file for every package: the union of the targets Transom ships for
+# (docs/packaging.md), so platform-only crates (keyring stores, objc2, windows-sys,
+# libsecret) are all listed.
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "aarch64-apple-darwin",
+    "x86_64-pc-windows-gnullvm",
+    "aarch64-pc-windows-gnullvm",
+]
+
+# Build scripts and tests run on the build machine; nothing of theirs is linked
+# into the binary.
+ignore-build-dependencies = true
+ignore-dev-dependencies = true
+
+# windows-rs ships its MIT text as license-mit, a name cargo-about doesn't scan:
+# without these it would print the standard text with a "<copyright holders>"
+# placeholder in place of Microsoft's notice. The checksum pins the file's text.
+[windows-sys.clarify]
+license = "MIT OR Apache-2.0"
+[[windows-sys.clarify.files]]
+path = "license-mit"
+license = "MIT"
+checksum = "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+
+[windows-link.clarify]
+license = "MIT OR Apache-2.0"
+[[windows-link.clarify.files]]
+path = "license-mit"
+license = "MIT"
+checksum = "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
