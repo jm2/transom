@@ -87,6 +87,49 @@ jobs:
       - name: Check (whole workspace, all targets, locked)
         run: cargo check --workspace --all-targets --locked
 
+  # ── Desktop metadata (desktop entry, AppStream, MIME), as Tributary/Balun ──
+  # These files ship in every Linux package and the Flatpak; check them with
+  # the validators distributions and Flathub use.
+  desktop-metadata:
+    name: Desktop Metadata
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install validators
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            appstream desktop-file-utils libxml2-utils shared-mime-info
+      - name: Validate the desktop entry
+        # desktop-file-validate exits 0 on warnings and hints: any output fails.
+        run: |
+          status=0
+          output="$(desktop-file-validate data/io.github.jm2.Transom.desktop 2>&1)" \
+            || status=$?
+          if [ "$status" -ne 0 ] || [ -n "$output" ]; then
+            printf '%s\n' "$output" >&2
+            exit 1
+          fi
+      - name: Validate the AppStream metainfo
+        # Pedantic hints are shown but never fail; the one expected is
+        # cid-contains-uppercase-letter (the app ID is io.github.jm2.Transom).
+        run: appstreamcli validate --no-net --pedantic data/io.github.jm2.Transom.metainfo.xml
+      - name: Validate the shared-mime-info package
+        # shared-mime-info ships its DTD only as the internal subset of
+        # freedesktop.org.xml. That copy restricts generic-icon to the names
+        # freedesktop.org.xml itself uses (the spec allows any icon name, and
+        # .rdp files use network-server), so relax that one attribute to CDATA.
+        run: |
+          dtd="$RUNNER_TEMP/shared-mime-info.dtd"
+          sed -n '/^<!DOCTYPE mime-info \[$/,/^]>$/p' /usr/share/mime/packages/freedesktop.org.xml \
+            | sed -e '1d' -e '$d' \
+            | sed -E 's/^(<!ATTLIST generic-icon name ).*( #REQUIRED>)$/\1CDATA\2/' > "$dtd"
+          grep -q '^<!ELEMENT mime-info ' "$dtd"
+          grep -qx '<!ATTLIST generic-icon name CDATA #REQUIRED>' "$dtd"
+          xmllint --noout --dtdvalid "$dtd" data/io.github.jm2.Transom.mime.xml
+
   # ── macOS (.app/.dmg, Homebrew GTK + FreeRDP), as Tributary/Balun ──────────
   build-macos:
     name: macOS (aarch64)
