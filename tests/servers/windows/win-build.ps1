@@ -36,6 +36,12 @@ try {
     if (-not (Test-Path $cargo)) {
         Log 'installing rustup'
         Invoke-WebRequest 'https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-msvc/rustup-init.exe' -OutFile "$root\rustup-init.exe"
+        # Run it only with a valid Authenticode signature from the Rust project.
+        $sig = Get-AuthenticodeSignature "$root\rustup-init.exe"
+        if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -cnotmatch '\bRust\b') {
+            Remove-Item -Force "$root\rustup-init.exe"
+            throw "rustup-init.exe signature not trusted: $($sig.Status) $($sig.SignerCertificate.Subject)"
+        }
         Native { & "$root\rustup-init.exe" -y --profile minimal --default-host x86_64-pc-windows-msvc } 'rustup-init'
     }
     $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
