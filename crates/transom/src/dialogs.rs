@@ -177,6 +177,92 @@ pub fn credentials(
     dialog.present(Some(parent));
 }
 
+/// Ask before connecting to a session that came from a file or link (anyone can send
+/// one). Shows where it goes, and what it would share; the clipboard and microphone
+/// stay off unless the user turns them on. `None` = cancelled.
+///
+/// Returns the dialog so automated checks can answer it (see `MainWindow`).
+pub fn confirm_untrusted(
+    parent: &impl IsA<gtk::Widget>,
+    profile: Profile,
+    source: &str,
+    done: impl FnOnce(Option<Profile>) + 'static,
+) -> adw::AlertDialog {
+    let heading = format!("Connect to {}?", profile.host);
+    let body = format!(
+        "This connection comes from {source}. Connect only if you trust where it came from."
+    );
+    let dialog = adw::AlertDialog::new(Some(&heading), Some(&body));
+    let group = adw::PreferencesGroup::new();
+    // Rows are plain text: every value here comes from the file or link.
+    let row = |title: &str, value: &str| {
+        let r = adw::ActionRow::builder()
+            .title(title)
+            .subtitle(value)
+            .use_markup(false)
+            .subtitle_selectable(true)
+            .build();
+        r.add_css_class("property");
+        group.add(&r);
+    };
+    row("Computer", &profile.address());
+    if let Some(u) = profile.username.as_deref().filter(|u| !u.is_empty()) {
+        row("User", u);
+    }
+    if let Some(g) = profile.gateway.as_ref().filter(|g| !g.host.is_empty()) {
+        let gw = transom_view::core::rdpfile::join_host_port(&g.host, g.port);
+        row(
+            if g.same_credentials {
+                "RD Gateway (receives your password too)"
+            } else {
+                "RD Gateway"
+            },
+            &gw,
+        );
+    }
+    let clipboard = adw::SwitchRow::builder()
+        .title("Share Clipboard")
+        .subtitle("Copy and paste between this computer and the remote one")
+        .active(false)
+        .build();
+    let wants_clipboard = profile.clipboard != ClipboardMode::Off;
+    if wants_clipboard {
+        group.add(&clipboard);
+    }
+    let mic = adw::SwitchRow::builder()
+        .title("Use Microphone")
+        .active(false)
+        .build();
+    if profile.microphone {
+        group.add(&mic);
+    }
+    dialog.set_extra_child(Some(&group));
+    dialog.add_response("cancel", "_Cancel");
+    dialog.add_response("connect", "C_onnect");
+    dialog.set_response_appearance("connect", adw::ResponseAppearance::Suggested);
+    // Enter doesn't connect: the user should read this first.
+    dialog.set_default_response(Some("cancel"));
+    dialog.set_close_response("cancel");
+    let wants_mic = profile.microphone;
+    let pending = RefCell::new(Some((done, profile)));
+    dialog.connect_response(None, move |_, response| {
+        let Some((f, mut profile)) = pending.borrow_mut().take() else {
+            return;
+        };
+        if response != "connect" {
+            f(None);
+            return;
+        }
+        if !(wants_clipboard && clipboard.is_active()) {
+            profile.clipboard = ClipboardMode::Off;
+        }
+        profile.microphone = wants_mic && mic.is_active();
+        f(Some(profile));
+    });
+    dialog.present(Some(parent));
+    dialog
+}
+
 /// Profile editor outcome.
 pub enum EditorResult {
     Saved(Box<Profile>),

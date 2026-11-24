@@ -39,7 +39,7 @@ if [[ -n "${SCALE2:-}" ]]; then
           || echo "gdctl could not set scale $SCALE2" ) &
 fi
 if [[ -n "${INJECT:-}" ]]; then
-    ( sleep "${INJECT_AFTER:-8}"; python3 -u "$INJECT" 2>&1 | sed "s/^/[inject] /" ) &
+    ( sleep "${INJECT_AFTER:-8}"; python3 -u "$INJECT" 2>&1 | sed -u "s/^/[inject] /" ) &
 fi
 export WAYLAND_DISPLAY=wayland-0 GDK_BACKEND=wayland
 exec "${BIN:-/demo/examples/transom-view-demo}" "$@"

@@ -42,6 +42,8 @@ demo_run() { # extra demo args… (background; sets $demo)
     podman run --rm --network host --userns=keep-id \
         -e SCALE=1 -e MONITOR=1600x1000 -e BIN=/demo/examples/transom-view-demo \
         -e RUST_LOG="${RUST_LOG:-}" \
+        -e INJECT=/checks/inject-focus.py -e INJECT_AFTER=8 \
+        -v "$PWD/tests/servers/view-check:/checks:ro,Z" \
         -v "$PWD/target/debug:/demo:ro,Z" \
         -v "$PWD/tests/servers/view-check/inner.sh:/inner.sh:ro,Z" \
         -v "$STATE:/state:Z" \
@@ -79,7 +81,7 @@ echo "--- files ($TARGET: both directions, contents compared by SHA-256)"
 clip open-paste-target >/dev/null
 podman run --rm --network host --userns=keep-id \
     -e SCALE=1 -e MONITOR=1600x1000 -e BIN=/demo/examples/transom-view-demo \
-    -e INJECT=/inject-paste.py -e INJECT_AFTER=14 \
+    -e INJECT=/inject-paste.py -e INJECT_AFTER=14 -e RUST_LOG="${RUST_LOG:-}" \
     -v "$PWD/target/debug:/demo:ro,Z" \
     -v "$PWD/tests/servers/view-check/inner.sh:/inner.sh:ro,Z" \
     -v "$PWD/tests/servers/windows/inject-paste.py:/inject-paste.py:ro,Z" \
@@ -88,7 +90,7 @@ podman run --rm --network host --userns=keep-id \
     "$T_ADDR" "$T_USER" --password-file /state/target.pw --trust "$T_FP" \
     --size 1600x1000 --file-clip-test --quit-after-ms 45000 >"$STATE/widget-files.log" 2>&1 &
 demo=$!
-sleep 26   # files offered at ~10 s, Ctrl+V at ~18 s, then the copy
+sleep 30   # focus and files offered at ~14 s, Ctrl+V at ~21 s, then the copy
 clip hash-pasted > "$STATE/files-pasted.json"
 clip copy-files > "$STATE/files-copied.json"
 wait "$demo" || true
