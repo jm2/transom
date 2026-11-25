@@ -1498,7 +1498,7 @@ dependencies = [
 
 [[package]]
 name = "transom"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "apple-native-keyring-store",
  "embed-resource",
@@ -1517,7 +1517,7 @@ dependencies = [
 
 [[package]]
 name = "transom-macos"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "objc2",
  "objc2-foundation",
@@ -1525,7 +1525,7 @@ dependencies = [
 
 [[package]]
 name = "transom-view"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-channel",
  "gtk4",
@@ -1538,7 +1538,7 @@ dependencies = [
 
 [[package]]
 name = "transom-view-capi"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "gtk4",
  "transom-view",
@@ -1547,7 +1547,7 @@ dependencies = [
 
 [[package]]
 name = "transom-view-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "proptest",
  "secrecy",
@@ -1559,7 +1559,7 @@ dependencies = [
 
 [[package]]
 name = "transom-view-freerdp"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bindgen",
  "libc",

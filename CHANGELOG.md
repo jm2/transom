@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] — 2026-11-25
+
+A security release: update from 0.1.0, the AppImage above all.
+
+### Security
+
+- The AppImage bundles FreeRDP 3.33.1, built from the same pinned source, patches and
+  options as the Flatpak, instead of Debian 13's FreeRDP 3.15, which has many known
+  vulnerabilities a malicious server or RD Gateway can exploit. Like the Flatpak, it
+  decodes H.264 only on the GPU, and it gains Remote Credential Guard. The .deb, .rpm
+  and Arch packages require FreeRDP 3.33.1 or later: on Debian 13 the .deb needs
+  FreeRDP from trixie-backports (see the README); on Ubuntu, use the AppImage or the
+  Flatpak.
+- Passwords are sent only with Network Level Authentication, unless a connection's
+  security is set to TLS Only or Allow Legacy RDP Security. When a server declines
+  NLA, Transom asks first and explains the risk, instead of sending the saved
+  password. Connections from files and links, and links pasted into Quick Connect,
+  require NLA and ask before connecting.
+- Clipboard: the remote computer can read your clipboard only while the session (in
+  multi-monitor mode, any of its windows) has focus. On GNOME (Wayland) and macOS,
+  0.1.0 could let a server read what you copied in other apps after you had once
+  pasted into the session. What a server sends after you've switched away no longer
+  replaces your clipboard; it's applied when you come back.
+- Clipboard on macOS: entries that password managers mark as concealed or transient
+  are recognised, and are neither offered nor sent to the remote computer.
+- Clipboard files: symbolic links and special files in a copied folder aren't offered,
+  a file replaced after the copy isn't read, and reads stop at the size that was
+  offered. Offered files stop being readable once you copy something else, and files
+  copied from a server can't be fetched after reconnecting. Data from a server is
+  size-checked before it's copied, and its own clipboard content is never offered back
+  to it.
+- Server redirections no longer bypass certificate checks, and credential prompts name
+  the computer that is actually asking.
+- Importing an `.rdp` file no longer keeps passwords or access tokens in the profile or
+  in exported files, and profiles saved by 0.1.0 are cleaned. Settings that would
+  change where mstsc connects or what it runs there aren't exported either.
+- Computer and gateway names must be host names or IP addresses (FreeRDP reads some
+  other strings as local sockets or open files).
+- Graphics: video layers are dropped whenever the graphics channel closes or the
+  server redirects, so they can't pile up, and they're clipped to the remote desktop.
+  A desktop larger than Transom supports ends the session instead of exhausting memory.
+  Region and damage bookkeeping is bounded, and screen updates waiting for a busy UI
+  are merged.
+- Logging in with Remember Password off forgets a saved password.
+- On Windows, DLLs load only from Transom's folder and the system's.
+- The README no longer suggests a plain `--appimage-extract-and-run`, which unpacks
+  into a shared temporary directory.
+- Dependabot no longer merges GitHub Actions updates by itself.
+
+### Changed
+
+- The connection editor warns while Allow Legacy RDP Security or TLS Only is chosen.
+
 ## [0.1.0] — 2026-11-24
 
 The first release.
@@ -61,5 +114,6 @@ The first release.
   ([docs/security.md](https://github.com/jm2/transom/blob/main/docs/security.md),
   [#18](https://github.com/jm2/transom/issues/18)).
 
-[Unreleased]: https://github.com/jm2/transom/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/jm2/transom/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/jm2/transom/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/jm2/transom/releases/tag/v0.1.0

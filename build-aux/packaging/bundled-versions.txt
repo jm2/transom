@@ -41,7 +41,7 @@ homebrew	libtiff	4.7.2
 homebrew	libxml2	2.15.4
 homebrew	openssl@4	4.1.0
 homebrew	webp	1.6.0
-homebrew	zstd	1.5.7_1
+homebrew	zstd	1.6.0
 msys2	dav1d	1.5.5-1
 msys2	ffmpeg	9.1-1
 msys2	freerdp	3.33.1-2

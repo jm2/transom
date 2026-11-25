@@ -11,7 +11,7 @@ members = [
 default-members = ["crates/transom-view-core"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.98"
 # Libraries (transom-view*) are Apache-2.0; the transom app is GPL-3.0-or-later.
@@ -20,10 +20,10 @@ repository = "https://github.com/jm2/transom"
 authors = ["Transom Contributors"]
 
 [workspace.dependencies]
-transom-view-core = { path = "crates/transom-view-core", version = "0.1.0" }
-transom-view-freerdp = { path = "crates/transom-view-freerdp", version = "0.1.0" }
-transom-view = { path = "crates/transom-view", version = "0.1.0" }
-transom-macos = { path = "crates/transom-macos", version = "0.1.0" }
+transom-view-core = { path = "crates/transom-view-core", version = "0.1.1" }
+transom-view-freerdp = { path = "crates/transom-view-freerdp", version = "0.1.1" }
+transom-view = { path = "crates/transom-view", version = "0.1.1" }
+transom-macos = { path = "crates/transom-macos", version = "0.1.1" }
 
 adw = { version = "0.9", package = "libadwaita", features = ["v1_6"] }
 gtk = { version = "0.11", package = "gtk4", features = ["v4_16"] }
