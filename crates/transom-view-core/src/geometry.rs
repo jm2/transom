@@ -14,6 +14,15 @@
 pub const MIN_DESKTOP_DIM: u32 = 200;
 /// Maximum monitor dimension accepted by MS-RDPEDISP (2.2.2.2.1).
 pub const MAX_DESKTOP_DIM: u32 = 8192;
+/// Largest remote desktop side accepted from a server, in pixels. The client asks for
+/// at most [`MAX_DESKTOP_DIM`] per monitor, but a multi-monitor layout puts up to 16
+/// monitors side by side; MS-RDPBCGR limits that virtual desktop to 32766 pixels per
+/// side, which is also the largest graphics-pipeline surface FreeRDP accepts.
+pub const MAX_REMOTE_DESKTOP_SIDE: u32 = 32766;
+/// Largest remote desktop area accepted from a server: 2^28 pixels, 1 GiB per
+/// 32-bit copy of the framebuffer (FreeRDP keeps one; the engine shares another with
+/// the renderer).
+pub const MAX_REMOTE_DESKTOP_PIXELS: u64 = 1 << 28;
 /// Range of `DesktopScaleFactor` accepted by MS-RDPBCGR / MS-RDPEDISP.
 pub const MIN_DESKTOP_SCALE: u32 = 100;
 pub const MAX_DESKTOP_SCALE: u32 = 500;
@@ -103,6 +112,18 @@ pub enum FitMode {
 pub struct DesktopRequest {
     pub size: Size,
     pub scale: ScaleFactors,
+}
+
+/// Whether a desktop size the server chose is one the engine accepts: not empty, at
+/// most [`MAX_REMOTE_DESKTOP_SIDE`] per side and [`MAX_REMOTE_DESKTOP_PIXELS`] in all.
+/// The server, not the client, picks the size (a Demand Active PDU allows 65535 ×
+/// 65535); anything larger ends the session instead of being allocated.
+pub fn remote_desktop_size_ok(size: Size) -> bool {
+    size.width > 0
+        && size.height > 0
+        && size.width <= MAX_REMOTE_DESKTOP_SIDE
+        && size.height <= MAX_REMOTE_DESKTOP_SIDE
+        && u64::from(size.width) * u64::from(size.height) <= MAX_REMOTE_DESKTOP_PIXELS
 }
 
 /// Sanitise a surface scale coming from the toolkit. Non-finite or non-positive
@@ -473,6 +494,27 @@ mod tests {
         assert_eq!(r, Size::new(200, 200));
         let r = requested_desktop_size(LogicalSize::new(5000.0, 5000.0), 2.0);
         assert_eq!(r, Size::new(8192, 8192));
+    }
+
+    #[test]
+    fn remote_desktop_size_cap() {
+        // What the client can ask for: one monitor at the maximum, and wide
+        // multi-monitor spans (five 4K monitors in a row, two 8K ones).
+        assert!(remote_desktop_size_ok(Size::new(8192, 8192)));
+        assert!(remote_desktop_size_ok(Size::new(5 * 3840, 2160)));
+        assert!(remote_desktop_size_ok(Size::new(2 * 7680, 4320)));
+        assert!(remote_desktop_size_ok(Size::new(16384, 16384)));
+        assert!(remote_desktop_size_ok(Size::new(32766, 8192)));
+        assert!(remote_desktop_size_ok(Size::new(1, 1)));
+        // Empty, a side past the protocol limit, the Demand Active maximum, and an
+        // area past 2^28 pixels with both sides in range.
+        assert!(!remote_desktop_size_ok(Size::new(0, 768)));
+        assert!(!remote_desktop_size_ok(Size::new(1024, 0)));
+        assert!(!remote_desktop_size_ok(Size::new(32767, 200)));
+        assert!(!remote_desktop_size_ok(Size::new(200, 32767)));
+        assert!(!remote_desktop_size_ok(Size::new(65535, 65535)));
+        assert!(!remote_desktop_size_ok(Size::new(32766, 8193)));
+        assert!(!remote_desktop_size_ok(Size::new(u32::MAX, u32::MAX)));
     }
 
     #[test]

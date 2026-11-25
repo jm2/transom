@@ -3,6 +3,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use gtk::prelude::*;
@@ -11,8 +12,8 @@ use gtk::{gdk, glib, graphene};
 use transom_view_core::config::SessionConfig;
 use transom_view_core::engine::{
     AuthRequest, CertDecision, CertPrompt, ConnectStage, Credentials, EngineCommand, EngineError,
-    EngineEvent, EngineHandle, Finished, InputEvent, MouseButton, PointerEvent, RdpEngine, Rect,
-    SharedFrame,
+    EngineEvent, EngineHandle, EventQueue, Finished, InputEvent, MouseButton, PointerEvent,
+    RdpEngine, Rect, SharedFrame,
 };
 use transom_view_core::geometry::{
     self, DesktopRequest, FitMode, LayoutTracker, LogicalSize, Point, ScaleMode, Size, Viewport,
@@ -272,13 +273,15 @@ mod imp {
                 }
             }
             // Video layers: the whole frame, clipped to each rectangle of its region,
-            // with the same device-pixel rounding as the tiles underneath.
+            // with the same device-pixel rounding as the tiles underneath. Nothing is
+            // drawn outside the desktop (into the letterbox) or this view's part of it.
             let dev = |x: f64, y: f64| {
                 (
                     (vp.offset_x + (x - origin.0) * vp.ratio).round(),
                     (vp.offset_y + (y - origin.1) * vp.ratio).round(),
                 )
             };
+            let shown = region.unwrap_or(Rect::new(0, 0, full.width, full.height));
             for layer in inner.video.values() {
                 let (ox, oy) = (layer.origin.0 as f64, layer.origin.1 as f64);
                 let (fx0, fy0) = dev(ox, oy);
@@ -292,23 +295,9 @@ mod imp {
                     (fx1 - fx0) as f32,
                     (fy1 - fy0) as f32,
                 );
-                for r in layer.region.rects() {
-                    // The origin comes from the server.
-                    let r = Rect::new(
-                        r.x.saturating_add(layer.origin.0),
-                        r.y.saturating_add(layer.origin.1),
-                        r.width,
-                        r.height,
-                    );
-                    let r = match region {
-                        Some(reg) => match reg.intersect(r) {
-                            Some(r) => r,
-                            None => continue,
-                        },
-                        None => r,
-                    };
+                for r in layer.region.placed(layer.origin, shown) {
                     let (x0, y0) = dev(r.x as f64, r.y as f64);
-                    let (x1, y1) = dev((r.x + r.width) as f64, (r.y + r.height) as f64);
+                    let (x1, y1) = dev(r.x as f64 + r.width as f64, r.y as f64 + r.height as f64);
                     snapshot.push_clip(&graphene::Rect::new(
                         x0 as f32,
                         y0 as f32,
@@ -628,6 +617,11 @@ mod imp {
                         obj.emit_by_name::<()>("first-frame", &[]);
                     }
                 }
+                EngineEvent::VideoReset => {
+                    self.inner.borrow_mut().video.clear();
+                    obj.queue_draw();
+                    self.each_follower(|v| v.queue_draw());
+                }
                 EngineEvent::DesktopResized(size) => {
                     self.inner.borrow_mut().desktop = size;
                     obj.queue_draw();
@@ -676,7 +670,14 @@ mod imp {
                 }
                 EngineEvent::Redirecting { target } => {
                     tracing::info!(%target, "server redirection");
-                    self.inner.borrow_mut().layout.reset();
+                    {
+                        let mut inner = self.inner.borrow_mut();
+                        inner.layout.reset();
+                        // The graphics surfaces belonged to the old server.
+                        inner.video.clear();
+                    }
+                    obj.queue_draw();
+                    self.each_follower(|v| v.queue_draw());
                 }
                 EngineEvent::ResizeAvailable => {
                     let mut inner = self.inner.borrow_mut();
@@ -1076,11 +1077,20 @@ impl TransomView {
             (config.scale_mode, config.fit_mode, config.clipboard);
 
         let monitors = (config.monitors.len() > 1).then(|| config.monitors.clone());
-        let (tx, rx) = async_channel::unbounded();
+        // Events wait in a queue that merges frame updates while the UI is busy (so
+        // it can't grow with the server's frame rate); the channel only wakes the UI.
+        let queue = Arc::new(Mutex::new(EventQueue::new()));
+        let (wake, woken) = async_channel::bounded::<()>(1);
+        let pending = queue.clone();
         let handle = engine.connect(
             config,
             Box::new(move |ev| {
-                let _ = tx.send_blocking(ev);
+                if wake.is_closed() {
+                    return; // the view stopped listening
+                }
+                pending.lock().unwrap_or_else(|e| e.into_inner()).push(ev);
+                // Full: a wake-up is already pending, and it will see this event.
+                let _ = wake.try_send(());
             }),
         )?;
 
@@ -1101,12 +1111,17 @@ impl TransomView {
 
         let weak = self.downgrade();
         glib::spawn_future_local(async move {
-            while let Ok(ev) = rx.recv().await {
-                let Some(view) = weak.upgrade() else { break };
-                if view.imp().inner.borrow().session != session {
-                    break;
+            'wake: while woken.recv().await.is_ok() {
+                let events = queue.lock().unwrap_or_else(|e| e.into_inner()).take();
+                for ev in events {
+                    let Some(view) = weak.upgrade() else {
+                        break 'wake;
+                    };
+                    if view.imp().inner.borrow().session != session {
+                        break 'wake;
+                    }
+                    view.imp().handle_event(ev);
                 }
-                view.imp().handle_event(ev);
             }
         });
         Ok(())

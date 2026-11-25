@@ -5,6 +5,7 @@
 //! and reports to the UI via an [`EventSink`]. The UI drives it with [`EngineCommand`]s
 //! through an [`EngineHandle`]. Neither side depends on a GUI toolkit.
 
+use std::collections::VecDeque;
 use std::fmt;
 use std::sync::mpsc;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
@@ -57,6 +58,58 @@ impl Rect {
         let y2 = self.y.saturating_add(self.height).min(size.height);
         (self.x < x2 && self.y < y2).then(|| Rect::new(self.x, self.y, x2 - self.x, y2 - self.y))
     }
+
+    pub fn is_empty(self) -> bool {
+        self.width == 0 || self.height == 0
+    }
+
+    pub fn area(self) -> u64 {
+        u64::from(self.width) * u64::from(self.height)
+    }
+
+    /// The smallest rectangle containing both (an empty one adds nothing). Edges
+    /// saturate at `u32::MAX`.
+    pub fn bounding(self, other: Rect) -> Rect {
+        if other.is_empty() {
+            return self;
+        }
+        if self.is_empty() {
+            return other;
+        }
+        let x0 = self.x.min(other.x);
+        let y0 = self.y.min(other.y);
+        let x1 = self
+            .x
+            .saturating_add(self.width)
+            .max(other.x.saturating_add(other.width));
+        let y1 = self
+            .y
+            .saturating_add(self.height)
+            .max(other.y.saturating_add(other.height));
+        Rect::new(x0, y0, x1 - x0, y1 - y0)
+    }
+}
+
+/// Most damage rectangles one frame update carries; past this it carries their
+/// bounding box instead. Each rectangle is copied out of the backend's framebuffer
+/// and marks tiles separately, and the server decides how many there are.
+pub const MAX_DAMAGE_RECTS: usize = 64;
+
+/// `rects` as a frame update should carry them: unchanged, or their bounding box
+/// alone when there are more than [`MAX_DAMAGE_RECTS`] of them or they overlap so much
+/// that copying each would move more pixels than the box holds.
+pub fn coalesce_damage(rects: Vec<Rect>) -> Vec<Rect> {
+    let bounds = rects.iter().fold(Rect::default(), |b, r| b.bounding(*r));
+    let area: u64 = rects.iter().map(|r| r.area()).sum();
+    if rects.len() > MAX_DAMAGE_RECTS || area > bounds.area() {
+        if bounds.is_empty() {
+            Vec::new()
+        } else {
+            vec![bounds]
+        }
+    } else {
+        rects
+    }
 }
 
 /// Pixel layout of the shared framebuffer. Matches FreeRDP `PIXEL_FORMAT_BGRX32`
@@ -97,10 +150,45 @@ impl FrameData {
         self.generation += 1;
     }
 
+    /// Like [`new`](Self::new), but a size that can't be allocated is an error rather
+    /// than an abort. For sizes a server chose.
+    pub fn try_new(size: Size) -> Result<Self, FrameAllocError> {
+        let (stride, pixels) = zeroed_pixels(size)?;
+        Ok(Self {
+            size,
+            stride,
+            format: PixelFormat::Bgrx8888,
+            pixels,
+            generation: 0,
+        })
+    }
+
+    /// Like [`resize`](Self::resize), but fallible; on error the frame is unchanged.
+    pub fn try_resize(&mut self, size: Size) -> Result<(), FrameAllocError> {
+        let (stride, pixels) = zeroed_pixels(size)?;
+        self.size = size;
+        self.stride = stride;
+        self.pixels = pixels;
+        self.generation += 1;
+        Ok(())
+    }
+
     /// Resize, keeping the pixels the old and new sizes share (the rest black): a
     /// renderer then shows the old picture until the remote repaints at the new size.
+    ///
+    /// # Panics
+    /// If the new frame can't be allocated; see
+    /// [`try_resize_keeping`](Self::try_resize_keeping).
     pub fn resize_keeping(&mut self, size: Size) {
-        let mut next = Self::new(size);
+        if let Err(e) = self.try_resize_keeping(size) {
+            panic!("{e}");
+        }
+    }
+
+    /// Like [`resize_keeping`](Self::resize_keeping), but a size that can't be
+    /// allocated is an error rather than an abort; on error the frame is unchanged.
+    pub fn try_resize_keeping(&mut self, size: Size) -> Result<(), FrameAllocError> {
+        let mut next = Self::try_new(size)?;
         next.format = self.format;
         next.generation = self.generation + 1;
         let row = self.size.width.min(size.width) as usize * 4;
@@ -109,7 +197,24 @@ impl FrameData {
                 .copy_from_slice(&self.pixels[y * self.stride..][..row]);
         }
         *self = next;
+        Ok(())
     }
+}
+
+/// A framebuffer of this size couldn't be allocated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("can't allocate a {}×{} framebuffer", .0.width, .0.height)]
+pub struct FrameAllocError(pub Size);
+
+/// Stride and zeroed pixels for a BGRX frame of `size`, allocated fallibly.
+fn zeroed_pixels(size: Size) -> Result<(usize, Vec<u8>), FrameAllocError> {
+    let err = || FrameAllocError(size);
+    let stride = (size.width as usize).checked_mul(4).ok_or_else(err)?;
+    let len = stride.checked_mul(size.height as usize).ok_or_else(err)?;
+    let mut pixels = Vec::new();
+    pixels.try_reserve_exact(len).map_err(|_| err())?;
+    pixels.resize(len, 0);
+    Ok((stride, pixels))
 }
 
 /// Shared handle to the framebuffer.
@@ -119,6 +224,11 @@ pub struct SharedFrame(Arc<Mutex<FrameData>>);
 impl SharedFrame {
     pub fn new(size: Size) -> Self {
         Self(Arc::new(Mutex::new(FrameData::new(size))))
+    }
+
+    /// Like [`new`](Self::new), but a size that can't be allocated is an error.
+    pub fn try_new(size: Size) -> Result<Self, FrameAllocError> {
+        Ok(Self(Arc::new(Mutex::new(FrameData::try_new(size)?))))
     }
 
     /// Lock the frame. A poisoned lock (engine thread panicked mid-write) still
@@ -266,6 +376,10 @@ pub enum EngineEvent {
         damage: Vec<Rect>,
         video: Vec<crate::video::VideoUpdate>,
     },
+    /// Drop every video layer (ADR 0006): the graphics channel closed or opened again,
+    /// so none of the surfaces shown before exist any more. Later `FrameUpdate`s start
+    /// from no layers.
+    VideoReset,
     /// The remote desktop size changed; the shared frame was resized.
     DesktopResized(Size),
     Pointer(PointerEvent),
@@ -313,6 +427,81 @@ pub enum EngineEvent {
 /// Receives engine events. Implementations must be cheap and non-blocking (e.g. push
 /// onto a channel that the UI main loop drains).
 pub type EventSink = Box<dyn Fn(EngineEvent) + Send + 'static>;
+
+/// Engine events on their way to the UI, merged while they wait. If the UI falls
+/// behind, a frame update folds into the one already queued (damage and video layer
+/// changes combined) and a pointer change replaces the queued one, so the queue
+/// doesn't grow with the server's frame rate. Every other event keeps its place.
+#[derive(Debug, Default)]
+pub struct EventQueue {
+    events: VecDeque<EngineEvent>,
+}
+
+impl EventQueue {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn push(&mut self, ev: EngineEvent) {
+        // The events this one may merge with: the trailing run of frame updates and
+        // pointer changes, whose order relative to each other doesn't matter.
+        let tail = self
+            .events
+            .iter()
+            .rev()
+            .take_while(|e| {
+                matches!(
+                    e,
+                    EngineEvent::FrameUpdate { .. }
+                        | EngineEvent::Pointer(_)
+                        | EngineEvent::PointerPosition { .. }
+                )
+            })
+            .count();
+        let start = self.events.len() - tail;
+        let mut tail = self.events.range_mut(start..);
+        match ev {
+            EngineEvent::FrameUpdate { damage, video } => {
+                if let Some(EngineEvent::FrameUpdate {
+                    damage: queued,
+                    video: queued_video,
+                }) = tail.find(|e| matches!(e, EngineEvent::FrameUpdate { .. }))
+                {
+                    queued.extend(damage);
+                    *queued = coalesce_damage(std::mem::take(queued));
+                    crate::video::merge_updates(queued_video, video);
+                } else {
+                    self.events
+                        .push_back(EngineEvent::FrameUpdate { damage, video });
+                }
+            }
+            EngineEvent::Pointer(p) => match tail.find(|e| matches!(e, EngineEvent::Pointer(_))) {
+                Some(queued) => *queued = EngineEvent::Pointer(p),
+                None => self.events.push_back(EngineEvent::Pointer(p)),
+            },
+            EngineEvent::PointerPosition { x, y } => {
+                match tail.find(|e| matches!(e, EngineEvent::PointerPosition { .. })) {
+                    Some(queued) => *queued = EngineEvent::PointerPosition { x, y },
+                    None => self.events.push_back(EngineEvent::PointerPosition { x, y }),
+                }
+            }
+            ev => self.events.push_back(ev),
+        }
+    }
+
+    /// Everything queued, in order, leaving the queue empty.
+    pub fn take(&mut self) -> VecDeque<EngineEvent> {
+        std::mem::take(&mut self.events)
+    }
+
+    pub fn len(&self) -> usize {
+        self.events.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.events.is_empty()
+    }
+}
 
 /// Mouse buttons.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -594,6 +783,122 @@ mod tests {
         .join();
         assert!(r.is_err());
         assert!(f.wait(Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn frame_allocation_failure_is_an_error() {
+        // Overflows the byte count, and one no allocator can satisfy.
+        let huge = Size::new(u32::MAX, u32::MAX);
+        assert_eq!(FrameData::try_new(huge).unwrap_err(), FrameAllocError(huge));
+        let huge = Size::new(1 << 30, 1 << 30);
+        assert!(FrameData::try_new(huge).is_err());
+        assert!(SharedFrame::try_new(huge).is_err());
+        // A failed resize leaves the frame as it was.
+        let mut f = FrameData::try_new(Size::new(4, 2)).unwrap();
+        f.pixels[0] = 7;
+        assert!(f.try_resize_keeping(huge).is_err());
+        assert!(f.try_resize(huge).is_err());
+        assert_eq!((f.size, f.stride, f.generation), (Size::new(4, 2), 16, 0));
+        assert_eq!((f.pixels.len(), f.pixels[0]), (32, 7));
+        f.try_resize(Size::new(2, 2)).unwrap();
+        assert_eq!((f.stride, f.pixels.len(), f.generation), (8, 16, 1));
+        assert!(f.pixels.iter().all(|&b| b == 0));
+    }
+
+    #[test]
+    fn rect_bounding() {
+        let a = Rect::new(10, 10, 5, 5);
+        assert_eq!(a.bounding(Rect::new(0, 20, 2, 2)), Rect::new(0, 10, 15, 12));
+        assert_eq!(a.bounding(Rect::new(100, 100, 0, 5)), a);
+        assert_eq!(Rect::default().bounding(a), a);
+        assert_eq!(
+            Rect::new(u32::MAX - 1, 0, 10, 1).bounding(Rect::new(0, 0, 1, 1)),
+            Rect::new(0, 0, u32::MAX, 1)
+        );
+    }
+
+    #[test]
+    fn damage_coalescing() {
+        // Few, disjoint: unchanged.
+        let few = vec![Rect::new(0, 0, 10, 10), Rect::new(100, 100, 10, 10)];
+        assert_eq!(coalesce_damage(few.clone()), few);
+        // Overlapping copies cost more than their bounding box.
+        let same = vec![Rect::new(5, 5, 10, 10); 3];
+        assert_eq!(coalesce_damage(same), vec![Rect::new(5, 5, 10, 10)]);
+        // Too many: the bounding box, however sparse.
+        let many: Vec<Rect> = (0..=MAX_DAMAGE_RECTS as u32)
+            .map(|i| Rect::new(i * 20, i, 1, 1))
+            .collect();
+        assert_eq!(
+            coalesce_damage(many),
+            vec![Rect::new(0, 0, MAX_DAMAGE_RECTS as u32 * 20 + 1, 65)]
+        );
+        let empty = vec![Rect::default(); MAX_DAMAGE_RECTS + 1];
+        assert!(coalesce_damage(empty).is_empty());
+        assert!(coalesce_damage(Vec::new()).is_empty());
+    }
+
+    fn frame_update(damage: &[Rect]) -> EngineEvent {
+        EngineEvent::FrameUpdate {
+            damage: damage.to_vec(),
+            video: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn event_queue_merges_frame_updates() {
+        let mut q = EventQueue::new();
+        q.push(frame_update(&[Rect::new(0, 0, 1, 1)]));
+        q.push(EngineEvent::Pointer(PointerEvent::Hidden));
+        q.push(frame_update(&[Rect::new(5, 5, 1, 1)]));
+        q.push(EngineEvent::Pointer(PointerEvent::Default));
+        q.push(EngineEvent::PointerPosition { x: 1, y: 2 });
+        q.push(EngineEvent::PointerPosition { x: 3, y: 4 });
+        for i in 0..1000 {
+            q.push(frame_update(&[Rect::new(i, 0, 1, 1)]));
+        }
+        assert_eq!(q.len(), 3);
+        let ev: Vec<_> = q.take().into_iter().collect();
+        assert!(q.is_empty());
+        match &ev[..] {
+            [
+                EngineEvent::FrameUpdate { damage, .. },
+                EngineEvent::Pointer(PointerEvent::Default),
+                EngineEvent::PointerPosition { x: 3, y: 4 },
+            ] => {
+                assert!(damage.len() <= MAX_DAMAGE_RECTS);
+                let bounds = damage.iter().fold(Rect::default(), |b, r| b.bounding(*r));
+                assert_eq!(bounds, Rect::new(0, 0, 1000, 6));
+                // Nothing that was damaged is lost.
+                for p in [Rect::new(5, 5, 1, 1), Rect::new(999, 0, 1, 1)] {
+                    assert!(damage.iter().any(|r| r.intersect(p) == Some(p)));
+                }
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn event_queue_keeps_order_across_other_events() {
+        let mut q = EventQueue::new();
+        q.push(frame_update(&[Rect::new(0, 0, 1, 1)]));
+        q.push(EngineEvent::VideoReset);
+        q.push(frame_update(&[Rect::new(1, 0, 1, 1)]));
+        q.push(EngineEvent::DesktopResized(Size::new(10, 10)));
+        q.push(EngineEvent::Pointer(PointerEvent::Hidden));
+        q.push(frame_update(&[Rect::new(2, 0, 1, 1)]));
+        let ev: Vec<_> = q.take().into_iter().collect();
+        assert!(matches!(
+            &ev[..],
+            [
+                EngineEvent::FrameUpdate { .. },
+                EngineEvent::VideoReset,
+                EngineEvent::FrameUpdate { .. },
+                EngineEvent::DesktopResized(_),
+                EngineEvent::Pointer(_),
+                EngineEvent::FrameUpdate { .. },
+            ]
+        ));
     }
 
     #[test]
