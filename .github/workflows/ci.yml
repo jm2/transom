@@ -88,6 +88,8 @@ jobs:
   # ── AppImage (Debian 13 base) ───────────────────────────────────────────────
   # The release workflow builds both arches; this checks the bundling on each
   # change: every library present and binding (the build smoke-tests the image).
+  # FreeRDP is built from the Flatpak's pinned source (build-aux/appimage/
+  # build-freerdp.sh), not Debian's: its development files stay uninstalled.
   appimage:
     name: AppImage (x86_64)
     runs-on: ubuntu-latest
@@ -97,9 +99,11 @@ jobs:
         run: |
           apt-get update
           apt-get install -y build-essential pkg-config clang libclang-dev curl git \
-            libgtk-4-dev libadwaita-1-dev freerdp3-dev libwinpr3-dev libsecret-1-dev \
+            libgtk-4-dev libadwaita-1-dev libsecret-1-dev \
             libavcodec-dev libavutil-dev patchelf squashfs-tools binutils libglib2.0-bin \
-            librsvg2-common dconf-gsettings-backend openssl-provider-legacy adwaita-icon-theme
+            librsvg2-common dconf-gsettings-backend openssl-provider-legacy adwaita-icon-theme \
+            cmake ninja-build libssl-dev libkrb5-dev libicu-dev libopus-dev libpulse-dev \
+            libcups2-dev libpcsclite-dev libusb-1.0-0-dev libswscale-dev libsystemd-dev
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false

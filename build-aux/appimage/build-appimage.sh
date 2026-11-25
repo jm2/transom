@@ -3,11 +3,17 @@
 # Assemble the Transom AppImage from a release binary. `scripts/build-linux.sh
 # --appimage` runs it from the repository root, after checking the tools it needs.
 # Build it on Debian 13, as the release workflow does: the oldest system with
-# Transom's minimum GTK, libadwaita and FreeRDP, and so the widest reach (it
-# reports the oldest glibc the image runs with: 2.39, Ubuntu 24.04), and the
-# bundled packages are recorded with dpkg.
+# Transom's minimum GTK and libadwaita, and so the widest reach (it reports the
+# oldest glibc the image runs with: 2.39, Ubuntu 24.04), and the bundled packages are
+# recorded with dpkg. FreeRDP is the exception: Debian 13's has known security
+# problems, so build-aux/appimage/build-freerdp.sh builds the Flatpak's pinned
+# release from source, BINARY is built against it, and its libraries come from there.
 #
-#   build-aux/appimage/build-appimage.sh BINARY OUTPUT
+#   build-aux/appimage/build-appimage.sh BINARY FREERDP OUTPUT
+#
+# FREERDP is the directory build-freerdp.sh wrote. The FreeRDP libraries bundled must
+# be its own (the build fails otherwise), and BUNDLED-PACKAGES.txt records them as
+# built from that source, with its licence files and patches.
 #
 # An AppImage is the AppImage type2 runtime followed by a squashfs image of an
 # AppDir. The runtime is the release pinned below, downloaded once into
@@ -22,11 +28,14 @@
 #   usr/share/              icons (Adwaita, the app's), GTK's GSettings schemas,
 #                           the desktop entry, metainfo, MIME type
 #   usr/share/doc/transom/  COPYING, THIRD-PARTY-NOTICES.txt,
-#                           RUST-CRATE-LICENSES.txt, BUNDLED-PACKAGES.txt, licenses/
+#                           RUST-CRATE-LICENSES.txt, BUNDLED-PACKAGES.txt, licenses/,
+#                           patches/ (applied to FreeRDP)
 set -euo pipefail
 
-BIN=${1:?usage: build-appimage.sh BINARY OUTPUT}
-OUT=${2:?usage: build-appimage.sh BINARY OUTPUT}
+usage="usage: build-appimage.sh BINARY FREERDP OUTPUT"
+BIN=${1:?$usage}
+FREERDP=${2:?$usage}
+OUT=${3:?$usage}
 ID=io.github.jm2.Transom
 ARCH=$(uname -m)
 # https://github.com/AppImage/type2-runtime/releases
@@ -42,6 +51,14 @@ VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 
 info() { echo "==> $*"; }
 fail() { echo "build-appimage: $*" >&2; exit 1; }
+
+[[ -f $FREERDP/build-info.txt ]] || fail "$FREERDP isn't a build of build-aux/appimage/build-freerdp.sh"
+FREERDP=$(realpath "$FREERDP")
+# Where the FreeRDP libraries are; ldd finds them there for BINARY (and the libraries
+# found there are recorded as built from source).
+FREERDP_LIB=$FREERDP/root/usr/lib
+# build-info.txt: KIND<TAB>VALUE lines.
+freerdp_info() { awk -F'\t' -v k="$1" '$1 == k { print $2 }' "$FREERDP/build-info.txt"; }
 
 work=$(mktemp -d -p "${TMPDIR:-/var/tmp}" transom-appimage.XXXXXX)
 trap 'rm -rf "$work"' EXIT
@@ -83,7 +100,7 @@ bundle_libs() {
         where=()
         while read -r so path; do
             where[$so]=$path
-        done < <(ldd "$elf" | awk '$2 == "=>" { print $1, $3 }')
+        done < <(LD_LIBRARY_PATH=$FREERDP_LIB ldd "$elf" | awk '$2 == "=>" { print $1, $3 }')
         while read -r so; do
             [[ -z $so || -n ${EXCLUDED[$so]:-} || -e $APPDIR/usr/lib/$so ]] && continue
             path=${where[$so]:-}
@@ -141,6 +158,11 @@ ln -s "$ID.png" "$APPDIR/.DirIcon"
 info "bundling libraries"
 bundle_libs "$BIN" "$PIXBUF/gdk-pixbuf-query-loaders" "${modules[@]}"
 info "bundled $(find "$APPDIR/usr/lib" -maxdepth 1 -name '*.so*' | wc -l) libraries"
+# The FreeRDP built from source, never another copy (Debian's, say).
+for so in libfreerdp3.so.3 libfreerdp-client3.so.3 libwinpr3.so.3; do
+    grep -qxF "$FREERDP_LIB/$so"$'\t'"usr/lib/$so" "$work/files" \
+        || fail "usr/lib/$so isn't the FreeRDP built from source ($FREERDP_LIB)"
+done
 
 # Each finds its libraries next to it, or in usr/lib from the programs and modules.
 set_runpath() {
@@ -177,11 +199,16 @@ versions=$(for f in "${elves[@]}"; do if [[ -f $f ]]; then readelf -V "$f"; fi; 
 glibc=$(grep -o 'Name: GLIBC_[0-9.]*' <<<"$versions" | sed 's/.*GLIBC_//' | sort -Vu | tail -1)
 glibcxx=$(grep -o 'Name: GLIBCXX_[0-9.]*' <<<"$versions" | sed 's/.*GLIBCXX_//' | sort -Vu | tail -1)
 
-# ---- licences: the notices, and the Debian package behind every bundled file ----
-info "recording bundled Debian packages"
+# ---- licences: the notices, FreeRDP's source, and the Debian package behind every
+# other bundled file ----
+info "recording the bundled FreeRDP build and Debian packages"
 DOC=$APPDIR/usr/share/doc/transom
 install -Dm644 -t "$DOC" COPYING build-aux/packaging/THIRD-PARTY-NOTICES.txt \
     build-aux/packaging/RUST-CRATE-LICENSES.txt
+# FreeRDP's licence and notice files, and the patches Transom applies to it.
+mkdir -p "$DOC/licenses/freerdp" "$DOC/patches/freerdp"
+cp -R "$FREERDP/licenses/." "$DOC/licenses/freerdp/"
+cp -R "$FREERDP/patches/." "$DOC/patches/freerdp/"
 owner() { # FILE → the package (name:arch) that installed it
     local f p
     for f in "$1" "$(realpath "$1")"; do
@@ -192,23 +219,44 @@ owner() { # FILE → the package (name:arch) that installed it
     return 1
 }
 : > "$work/owned"
+: > "$work/freerdp"
 while IFS=$'\t' read -r src dest; do
+    if [[ $src == "$FREERDP_LIB"/* ]]; then
+        echo "$dest" >> "$work/freerdp"
+        continue
+    fi
     pkg=$(owner "$src") || fail "no Debian package installed $src: its source can't be named"
     printf '%s\t%s\n' "$pkg" "$dest" >> "$work/owned"
 done < "$work/files"
+# comma_list: sorted lines in, one ", "-separated line out.
+comma_list() { LC_ALL=C sort | awk '{ printf "%s%s", (NR > 1 ? ", " : ""), $0 }'; }
 # shellcheck source=/dev/null
 distro=$(. /etc/os-release && echo "${PRETTY_NAME:-$ID}")
-title="Transom $VERSION AppImage ($ARCH): bundled Debian packages"
+title="Transom $VERSION AppImage ($ARCH): bundled libraries"
+freerdp_version=$(freerdp_info version)
 {
     printf '%s\n%s\n\n' "$title" "$(printf '%*s' "${#title}" '' | tr ' ' =)"
     fmt -w 80 <<TXT
-Every library, program, module, icon and schema in this AppImage that Transom does
-not build itself comes from one of the $distro packages below, at the version
-given. Each entry names the Debian source package (its source, with Debian's
-patches and build recipe, is at the address given), the upstream homepage, the
-package's copyright file (its licence terms, copied into licenses/), and what it
-provided. See THIRD-PARTY-NOTICES.txt.
+Transom builds the FreeRDP in this AppImage from the upstream release below, with
+the same patches and build options as its Flatpak. Every other library, program,
+module, icon and schema in this AppImage that Transom does not build itself comes
+from one of the $distro packages after it, at the version given. Each of
+those names the Debian source package (its source, with Debian's patches and build
+recipe, is at the address given), the upstream homepage, the package's copyright
+file (its licence terms, copied into licenses/), and what it provided. See
+THIRD-PARTY-NOTICES.txt.
 TXT
+    printf '\nfreerdp %s (built from source)\n' "$freerdp_version"
+    printf '  Source: %s\n  SHA-256: %s\n' "$(freerdp_info url)" "$(freerdp_info sha256)"
+    patches=$(freerdp_info patch | sed 's|^|patches/freerdp/|' | comma_list)
+    printf '  Patches: %s\n' "${patches:-none}"
+    printf '  Homepage: https://www.freerdp.com/\n'
+    licences=$(find "$DOC/licenses/freerdp" -type f -printf 'licenses/freerdp/%P\n' | comma_list)
+    printf '  Licence: Apache-2.0 (%s)\n' "$licences"
+    printf '  CMake options:\n'
+    freerdp_info option | sed 's/^/    /'
+    printf '  CFLAGS: %s\n  LDFLAGS: %s\n' "$(freerdp_info cflags)" "$(freerdp_info ldflags)"
+    printf '  Bundled: %s\n' "$(comma_list < "$work/freerdp")"
     while read -r pkg; do
         name=${pkg%%:*}
         IFS=$'\t' read -r ver src srcver home < <(dpkg-query -W \
@@ -224,7 +272,7 @@ TXT
         printf '  Homepage: %s\n  Copyright: %s\n  Bundled: %s\n' "${home:-none recorded}" "$copyright" "$files"
     done < <(cut -f1 "$work/owned" | LC_ALL=C sort -u)
 } > "$DOC/BUNDLED-PACKAGES.txt"
-info "recorded $(grep -c '^  Bundled:' "$DOC/BUNDLED-PACKAGES.txt") Debian packages in BUNDLED-PACKAGES.txt"
+info "recorded FreeRDP $freerdp_version (built from source) and $(cut -f1 "$work/owned" | sort -u | wc -l) Debian packages in BUNDLED-PACKAGES.txt"
 
 # ---- smoke test, image ----
 # Binding every symbol at startup catches a library that is too old for another.

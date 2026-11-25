@@ -224,7 +224,9 @@ jobs:
     name: Debian package (${{ matrix.arch }})
     needs: prepare
     runs-on: ${{ matrix.runner }}
-    # Debian 13 is the oldest Debian-family release with FreeRDP >= 3.15.
+    # Debian 13, with FreeRDP 3.33.1 from trixie-backports: Debian 13's own FreeRDP
+    # (3.15) has known security problems a server can exploit, so the package
+    # requires 3.33.1 (crates/transom/Cargo.toml) and is built against it.
     container: debian:trixie
     strategy:
       matrix:
@@ -234,10 +236,15 @@ jobs:
     steps:
       - name: Install build dependencies
         run: |
+          printf '%s\n' 'Types: deb' 'URIs: http://deb.debian.org/debian' \
+            'Suites: trixie-backports' 'Components: main' \
+            'Signed-By: /usr/share/keyrings/debian-archive-keyring.pgp' \
+            > /etc/apt/sources.list.d/trixie-backports.sources
           apt-get update
           apt-get install -y build-essential pkg-config clang libclang-dev curl git dpkg-dev \
-            libgtk-4-dev libadwaita-1-dev freerdp3-dev libwinpr3-dev libsecret-1-dev \
-            libavcodec-dev libavutil-dev
+            libgtk-4-dev libadwaita-1-dev libsecret-1-dev libavcodec-dev libavutil-dev
+          apt-get install -y -t trixie-backports freerdp3-dev libwinpr3-dev
+          dpkg-query -W libfreerdp3-3 libfreerdp-client3-3 libwinpr3-3
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.prepare.outputs.build_ref }}
@@ -250,6 +257,7 @@ jobs:
           cargo build --release --locked -p transom
           cargo install cargo-deb --version 3.8.0 --locked
           cargo deb -p transom --no-build --output dist/transom-${{ matrix.arch }}.deb
+          dpkg-deb --field dist/transom-${{ matrix.arch }}.deb Depends
           apt-get install -y ./dist/transom-${{ matrix.arch }}.deb
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -261,8 +269,10 @@ jobs:
     name: AppImage (${{ matrix.arch }})
     needs: prepare
     runs-on: ${{ matrix.runner }}
-    # Debian 13 is the oldest system with Transom's minimum GTK, libadwaita and
-    # FreeRDP; the AppImage bundles its libraries and runs on glibc 2.39 and later.
+    # Debian 13 is the oldest system with Transom's minimum GTK and libadwaita; the
+    # AppImage bundles its libraries and runs on glibc 2.39 and later. FreeRDP is
+    # built from the Flatpak's pinned source (build-aux/appimage/build-freerdp.sh),
+    # not Debian's: its development files stay uninstalled.
     container: debian:trixie
     strategy:
       matrix:
@@ -274,9 +284,11 @@ jobs:
         run: |
           apt-get update
           apt-get install -y build-essential pkg-config clang libclang-dev curl git \
-            libgtk-4-dev libadwaita-1-dev freerdp3-dev libwinpr3-dev libsecret-1-dev \
+            libgtk-4-dev libadwaita-1-dev libsecret-1-dev \
             libavcodec-dev libavutil-dev patchelf squashfs-tools binutils libglib2.0-bin \
-            librsvg2-common dconf-gsettings-backend openssl-provider-legacy adwaita-icon-theme
+            librsvg2-common dconf-gsettings-backend openssl-provider-legacy adwaita-icon-theme \
+            cmake ninja-build libssl-dev libkrb5-dev libicu-dev libopus-dev libpulse-dev \
+            libcups2-dev libpcsclite-dev libusb-1.0-0-dev libswscale-dev libsystemd-dev
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.prepare.outputs.build_ref }}

@@ -29,10 +29,12 @@ Quick-exit modes (choose at most one):
                 (cargo install --locked cargo-llvm-cov --version 0.8.7).
 
 Packaging (any combination; written to dist/ under the release asset names):
-  --deb         dist/transom-ARCH.deb with cargo-deb 3.8.0. Build it on Debian 13 /
-                Ubuntu 25.10 or later: its library dependencies come from
-                dpkg-shlibdeps (dpkg-dev).
-  --rpm         dist/transom-ARCH.rpm with cargo-generate-rpm 0.21.0. Needs
+  --deb         dist/transom-ARCH.deb with cargo-deb 3.8.0. Build it on Debian 13
+                with FreeRDP 3.33.1 from trixie-backports, as the release workflow
+                does (the package requires it): its library dependencies come
+                from dpkg-shlibdeps (dpkg-dev).
+  --rpm         dist/transom-ARCH.rpm with cargo-generate-rpm 0.21.0, against
+                FreeRDP 3.33.1 or later (the package requires it). Needs
                 rpm-build, whose find-requires gives the library dependencies.
   --arch-pkg    dist/transom-ARCH.pkg.tar.zst with makepkg (build-aux/arch/PKGBUILD).
                 It builds the committed HEAD (scripts/dist.sh), not uncommitted
@@ -43,8 +45,11 @@ Packaging (any combination; written to dist/ under the release asset names):
   --appimage    dist/transom-linux-ARCH.AppImage (build-aux/appimage/). Build it on
                 Debian 13, as the release workflow does: it bundles the build
                 system's libraries, and runs where the C library is as new as
-                they need (glibc 2.39, Ubuntu 24.04). Downloads the pinned AppImage
-                runtime once (checked against its SHA-256).
+                they need (glibc 2.39, Ubuntu 24.04). FreeRDP is not Debian's: it
+                builds the Flatpak's pinned FreeRDP release from source first
+                (build-aux/appimage/build-freerdp.sh), and Transom against it, in
+                target/appimage/. Downloads the FreeRDP source and the pinned
+                AppImage runtime once (each checked against its SHA-256).
 
 Other:
   -h, --help    Show this help and exit.
@@ -88,15 +93,22 @@ if (( FMT )); then
 fi
 
 [[ $(uname) == Linux ]] || fail "run this on Linux (scripts/build-macos.sh, scripts/build-windows.ps1)"
-# The host build: everything but a packaging run of only --arch-pkg/--flatpak, which
-# build in their own environments.
-HOST=$(( packaging == 0 || DEB || RPM || APPIMAGE ))
+# The host build, against the system's libraries: everything but a packaging run of
+# only --arch-pkg/--flatpak/--appimage, which build in their own environments (the
+# AppImage's against the FreeRDP it builds, with the system's other libraries).
+HOST=$(( packaging == 0 || DEB || RPM ))
 
 # ---- dependency checks (everything first, then one report) ----
 distro=$(. /etc/os-release 2>/dev/null; echo " ${ID:-} ${ID_LIKE:-} ")
 dnf_pkgs="gcc clang-devel pkgconf-pkg-config freerdp-devel libwinpr-devel gtk4-devel libadwaita-devel libsecret-devel libavcodec-free-devel libavutil-free-devel"
 apt_pkgs="build-essential pkg-config clang libclang-dev libgtk-4-dev libadwaita-1-dev freerdp3-dev libwinpr3-dev libsecret-1-dev libavcodec-dev libavutil-dev"
 pacman_pkgs="rust clang freerdp gtk4 libadwaita libsecret ffmpeg"
+# The AppImage alone builds its own FreeRDP: not the system's development files.
+if (( APPIMAGE && !HOST )); then
+    apt_pkgs=${apt_pkgs/ freerdp3-dev libwinpr3-dev/}
+fi
+# What build-aux/appimage/build-freerdp.sh needs for the Flatpak's FreeRDP features.
+freerdp_apt_pkgs="cmake ninja-build libssl-dev libkrb5-dev libicu-dev libopus-dev libpulse-dev libcups2-dev libpcsclite-dev libusb-1.0-0-dev libswscale-dev libsystemd-dev"
 hints=()
 case $distro in
     *" fedora "*|*" rhel "*) hints+=("Install the libraries:  sudo dnf install $dnf_pkgs") ;;
@@ -121,24 +133,42 @@ have_libclang() {
 }
 
 lib_problems=0
-if (( HOST )); then
+if (( HOST || APPIMAGE )); then
     check_rust
     before=${#PROBLEMS[@]}
     # The pkg-config the build scripts use: PKG_CONFIG, else pkg-config.
     pc=${PKG_CONFIG:-pkg-config}
     if command -v "$pc" >/dev/null; then
-        check_modules "$pc" "gtk4 4.16" "libadwaita-1 1.6" "freerdp3 3.15" \
-            "freerdp-client3 3.15" "winpr3 3.15" "libsecret-1"
-        # Optional: without FFmpeg, hardware H.264 decoding is left out of the build.
-        for m in libavcodec libavutil; do
-            "$pc" --atleast-version=59 "$m" 2>/dev/null \
-                || warn "$m >= 59 not found: building without hardware video decoding"
-        done
+        check_modules "$pc" "gtk4 4.16" "libadwaita-1 1.6" "libsecret-1"
+        if (( DEB || RPM )); then
+            # The packages require FreeRDP 3.33.1: older releases have known security
+            # problems a server can exploit.
+            check_modules "$pc" "freerdp3 3.33.1" "freerdp-client3 3.33.1" "winpr3 3.33.1"
+        elif (( HOST )); then
+            check_modules "$pc" "freerdp3 3.15" "freerdp-client3 3.15" "winpr3 3.15"
+        fi
+        if (( HOST )); then
+            # Optional: without FFmpeg, hardware H.264 decoding is left out of the build.
+            for m in libavcodec libavutil; do
+                "$pc" --atleast-version=59 "$m" 2>/dev/null \
+                    || warn "$m >= 59 not found: building without hardware video decoding"
+            done
+        fi
+        if (( APPIMAGE )); then
+            # FFmpeg (Transom's hardware video decoding, FreeRDP's scaling), and the
+            # libraries behind the other FreeRDP features the Flatpak has (PulseAudio,
+            # printers, smart cards, USB, Kerberos, ...).
+            check_modules "$pc" "libavcodec 59" "libavutil 59" libswscale openssl libpulse \
+                cups libpcsclite libusb-1.0 mit-krb5 icu-uc icu-i18n opus libsystemd
+        fi
     else
         problem "$pc (pkg-config)"
     fi
     have_libclang || problem "libclang, for bindgen (set LIBCLANG_PATH if it is somewhere unusual)"
     lib_problems=$(( ${#PROBLEMS[@]} - before ))
+    if (( DEB && lib_problems )); then
+        hints+=("The .deb needs FreeRDP 3.33.1; on Debian 13 it is in trixie-backports (README.md, Installation):  sudo apt install -t trixie-backports freerdp3-dev libwinpr3-dev")
+    fi
 fi
 (( CLIPPY )) && check_component clippy clippy
 (( COVERAGE )) && check_llvm_cov
@@ -187,7 +217,13 @@ if (( APPIMAGE )); then
         check_cmd mksquashfs "squashfs-tools"
         check_cmd readelf "binutils"
         check_cmd glib-compile-schemas "libglib2.0-bin"
-        [[ -n ${APPIMAGE_RUNTIME:-} ]] || check_cmd curl "curl (or set APPIMAGE_RUNTIME to a downloaded runtime)"
+        # FreeRDP's build (build-aux/appimage/build-freerdp.sh).
+        check_cmd cmake "cmake"
+        check_cmd ninja "ninja-build"
+        check_cmd patch "patch"
+        check_cmd dpkg-buildflags "dpkg-dev"
+        [[ -n ${APPIMAGE_RUNTIME:-} && -n ${FREERDP_TARBALL:-} ]] \
+            || check_cmd curl "curl (or set APPIMAGE_RUNTIME and FREERDP_TARBALL to downloaded copies)"
         multiarch=/usr/lib/$(uname -m)-linux-gnu
         for f in "$multiarch/gdk-pixbuf-2.0/gdk-pixbuf-query-loaders:libgdk-pixbuf-2.0-0" \
                  "$multiarch/gdk-pixbuf-2.0/2.10.0/loaders/libpixbufloader_svg.so:librsvg2-common" \
@@ -197,8 +233,8 @@ if (( APPIMAGE )); then
                  "/usr/share/icons/hicolor/index.theme:hicolor-icon-theme"; do
             [[ -f ${f%%:*} ]] || problem "${f%%:*}: ${f##*:}"
         done
-        if (( ${#PROBLEMS[@]} > before )); then
-            hints+=("For the AppImage:  sudo apt install patchelf squashfs-tools binutils libglib2.0-bin curl librsvg2-common dconf-gsettings-backend openssl-provider-legacy adwaita-icon-theme")
+        if (( ${#PROBLEMS[@]} > before || lib_problems )); then
+            hints+=("For the AppImage:  sudo apt install patchelf squashfs-tools binutils libglib2.0-bin curl librsvg2-common dconf-gsettings-backend openssl-provider-legacy adwaita-icon-theme $freerdp_apt_pkgs")
             lib_problems=1
         fi
     else
@@ -243,12 +279,17 @@ if (( FLATPAK )); then
     info "wrote $out"
 fi
 
+# Cargo's target directory (CARGO_TARGET_DIR, a config file, or target/).
+cargo_target_dir() {
+    cargo metadata --format-version 1 --no-deps --locked |
+        sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p'
+}
+
 # ---- host release build ----
 if (( HOST )); then
     info "cargo build --release -p transom"
     cargo build --release --locked -p transom
-    target_dir=$(cargo metadata --format-version 1 --no-deps --locked |
-        sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')
+    target_dir=$(cargo_target_dir)
     BIN=$target_dir/release/transom
     [[ -x $BIN ]] || fail "missing $BIN"
     info "built $BIN"
@@ -301,7 +342,15 @@ if (( ARCH_PKG )); then
 fi
 
 if (( APPIMAGE )); then
-    build-aux/appimage/build-appimage.sh "$BIN" "dist/transom-linux-$(uname -m).AppImage"
+    # FreeRDP from the Flatpak's pinned source, then Transom against it, in a target
+    # directory of their own: a --deb or --rpm of the same run keeps the system's.
+    appimage_dir=$(cargo_target_dir)/appimage
+    build-aux/appimage/build-freerdp.sh "$appimage_dir/freerdp"
+    info "cargo build --release -p transom (against $appimage_dir/freerdp)"
+    PKG_CONFIG_PATH="$appimage_dir/freerdp/root/usr/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" \
+        CARGO_TARGET_DIR=$appimage_dir cargo build --release --locked -p transom
+    build-aux/appimage/build-appimage.sh "$appimage_dir/release/transom" "$appimage_dir/freerdp" \
+        "dist/transom-linux-$(uname -m).AppImage"
 fi
 
 if (( packaging == 0 )); then
