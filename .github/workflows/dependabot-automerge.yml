@@ -1,12 +1,18 @@
 name: Dependabot auto-merge
 
-# Auto-merge clean semver-patch Dependabot PRs once CI is green (as Tributary).
+# Auto-merge clean semver-patch Dependabot PRs of Cargo dependencies once CI is
+# green (as Tributary).
 #
 # How the pieces fit together:
 #   * This workflow only ENABLES GitHub's native auto-merge on the PR.
 #   * The actual gate (the required status checks) is enforced by the
 #     "Protect main: PR + CI" ruleset on `main`, not by this file. Auto-merge
 #     lands the PR only after every check that ruleset requires has passed.
+#   * Only Cargo updates are auto-merged. Every GitHub Actions update waits for
+#     review, patch releases included: release.yml runs actions that no required
+#     check exercises (softprops/action-gh-release, actions/attest-build-provenance,
+#     actions/upload-artifact, actions/download-artifact) in the jobs that hold
+#     write permissions, so passing CI says nothing about them.
 #   * Only semver-patch updates are auto-merged. Minors and majors fall through
 #     the update-type guard below and wait for review: most core crates
 #     (gtk4, libadwaita, ...) are 0.x, where a minor bump is a breaking
@@ -157,6 +163,7 @@ jobs:
       github.actor == 'dependabot[bot]' &&
       github.event.pull_request.user.login == 'dependabot[bot]' &&
       github.repository == 'jm2/transom' &&
+      needs.inspect_changed_files.outputs.package_ecosystem == 'cargo' &&
       needs.inspect_changed_files.outputs.package_ecosystem != 'rust-toolchain' &&
       !contains(needs.inspect_changed_files.outputs.dependency_names, 'dtolnay/rust-toolchain') &&
       !contains(needs.inspect_changed_files.outputs.dependency_names, 'dependabot/fetch-metadata') &&
@@ -165,10 +172,10 @@ jobs:
       contents: write
       pull-requests: write
     steps:
-      # Minor and major bumps, compiler/MSRV proposals, rust-toolchain
-      # action-code proposals, and metadata-action self-updates never reach
-      # this writer.
-      - name: Enable exact-head auto-merge for patch updates
+      # GitHub Actions updates (all of them), minor and major bumps,
+      # compiler/MSRV proposals, rust-toolchain action-code proposals, and
+      # metadata-action self-updates never reach this writer.
+      - name: Enable exact-head auto-merge for Cargo patch updates
         shell: bash
         run: |
           set -euo pipefail
