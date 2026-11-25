@@ -280,7 +280,7 @@ impl Session {
         match self.pending_remember.borrow_mut().take() {
             Some(Some(pw)) => {
                 let label = format!("Transom: {}", profile.display_name());
-                glib::spawn_future_local(async move {
+                self.state.secret_op(async move {
                     if let Err(e) = secrets::store(&profile.id, &label, &pw).await {
                         tracing::warn!("saving password: {e}");
                     }
@@ -288,7 +288,8 @@ impl Session {
             }
             // Logged in with Remember Password off: don't keep an old one either.
             Some(None) => {
-                glib::spawn_future_local(async move { secrets::clear(&profile.id).await });
+                self.state
+                    .secret_op(async move { secrets::clear(&profile.id).await });
             }
             None => {}
         }

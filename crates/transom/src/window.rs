@@ -650,12 +650,14 @@ impl MainWindow {
             .add_toast(adw::Toast::new(&glib::markup_escape_text(text)));
     }
 
-    /// Quick connect: `host[:port]`, `user@host`, or an `rdp://` URI. A pasted link
-    /// is treated like one opened from elsewhere: it can carry settings (a gateway,
+    /// Quick connect: `host[:port]`, `user@host`, or an `rdp://` URI. Anything more
+    /// than a plain address (a pasted link, or link settings without the scheme) is
+    /// treated like a link opened from elsewhere: it can carry settings (a gateway,
     /// the microphone), so it's confirmed first.
     pub fn open_address(self: &Rc<Self>, text: &str) -> bool {
-        let link = text.contains("://");
-        let uri = if link {
+        let scheme = text.contains("://");
+        let link = scheme || text.contains(['=', '&', '?']);
+        let uri = if scheme {
             text.to_string()
         } else {
             format!("rdp://{text}")
@@ -758,7 +760,8 @@ impl MainWindow {
                     if let Err(e) = w.state.profiles.delete(&id) {
                         w.toast(&format!("Couldn't delete: {e}"));
                     }
-                    glib::spawn_future_local(async move { crate::secrets::clear(&id).await });
+                    w.state
+                        .secret_op(async move { crate::secrets::clear(&id).await });
                 }
             }
             w.state.refresh_all();

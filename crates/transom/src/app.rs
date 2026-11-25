@@ -40,6 +40,8 @@ pub struct AppState {
     pub draining: RefCell<Vec<Finished>>,
     sessions: RefCell<Vec<Rc<Session>>>,
     windows: RefCell<Vec<Rc<MainWindow>>>,
+    /// The last keyring change queued (`secret_op`), which the next one waits for.
+    last_secret_op: RefCell<Option<glib::JoinHandle<()>>>,
 }
 
 impl std::fmt::Debug for AppState {
@@ -49,6 +51,19 @@ impl std::fmt::Debug for AppState {
 }
 
 impl AppState {
+    /// Run a keyring change after the ones queued before it, so the last choice
+    /// (save, forget, delete) is what stays, even when one waits on an unlock prompt.
+    pub fn secret_op(&self, op: impl std::future::Future<Output = ()> + 'static) {
+        let previous = self.last_secret_op.borrow_mut().take();
+        let handle = glib::spawn_future_local(async move {
+            if let Some(p) = previous {
+                let _ = p.await;
+            }
+            op.await;
+        });
+        *self.last_secret_op.borrow_mut() = Some(handle);
+    }
+
     fn new() -> Self {
         let config = glib::user_config_dir().join("transom");
         let trust_path = config.join("known-hosts.toml");
@@ -78,6 +93,7 @@ impl AppState {
             draining: RefCell::new(Vec::new()),
             sessions: RefCell::new(Vec::new()),
             windows: RefCell::new(Vec::new()),
+            last_secret_op: RefCell::new(None),
         }
     }
 

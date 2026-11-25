@@ -905,6 +905,12 @@ unsafe extern "C" fn redirect(instance: *mut ffi::freerdp) -> ffi::BOOL {
             s,
             ffi::FreeRDP_ServerHostname,
         ));
+        // The server chose this name. FreeRDP 3.33 validates it, older versions
+        // don't, and FreeRDP reads `/…` and `|N` as local sockets (`valid_host`).
+        if !valid_host(&target) {
+            tracing::warn!("refusing a redirection to an invalid host name");
+            return FALSE;
+        }
         tracing::info!(%target, "server redirection");
         state.emit(EngineEvent::Redirecting { target });
         TRUE
@@ -924,6 +930,11 @@ struct StateChangedArgs {
     old_state: ffi::CONNECTION_STATE,
     new_state: ffi::CONNECTION_STATE,
 }
+
+/// Server Redirection PDU flags (MS-RDPBCGR 2.2.13.1): the redirection names the
+/// account to log in with.
+const LB_USERNAME: u32 = 0x0000_0004;
+const LB_DOMAIN: u32 = 0x0000_0008;
 
 /// [`State::stage`] once connected: later state changes (a reactivation) aren't
 /// progress to report.
@@ -1327,10 +1338,20 @@ unsafe extern "C" fn authenticate_ex(
                 .unwrap_or_else(|e| e.into_inner())
                 .clone();
             if let Some(c) = known {
-                let user = cstr_opt(*username)
-                    .filter(|u| !u.is_empty())
-                    .unwrap_or(c.username);
-                let dom = cstr_opt(*domain).or(c.domain).unwrap_or_default();
+                // The user name and domain that go with this password, unless a
+                // server redirection named the account (as brokers do).
+                let flags = ffi::freerdp_settings_get_uint32(
+                    (*ctx).settings,
+                    ffi::FreeRDP_RedirectionFlags,
+                );
+                let user = match cstr_opt(*username).filter(|u| !u.is_empty()) {
+                    Some(u) if flags & LB_USERNAME != 0 || c.username.is_empty() => u,
+                    _ => c.username,
+                };
+                let dom = match cstr_opt(*domain) {
+                    Some(d) if flags & LB_DOMAIN != 0 || c.domain.is_none() => d,
+                    _ => c.domain.unwrap_or_default(),
+                };
                 let ok = replace_cstring(username, &user)
                     && replace_cstring(domain, &dom)
                     && replace_cstring(password, c.password.expose_secret());
