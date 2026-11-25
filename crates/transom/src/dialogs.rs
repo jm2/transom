@@ -11,7 +11,7 @@ use transom_view::core::config::{AudioMode, CertPolicy, ClipboardMode, SecurityM
 use transom_view::core::engine::{CertDecision, CertPrompt};
 use transom_view::core::geometry::{FitMode, ScaleMode};
 use transom_view::core::profile::{Gateway, Profile};
-use transom_view::core::rdpfile::split_host_port;
+use transom_view::core::rdpfile::{split_host_port, valid_host};
 use transom_view::core::secrecy::SecretString;
 use transom_view::core::trust::TrustStatus;
 
@@ -111,21 +111,41 @@ pub struct EnteredCredentials {
     pub remember: bool,
 }
 
+/// What a credentials prompt shows.
+#[derive(Debug)]
+pub struct CredentialPrompt<'a> {
+    /// Who is asking ("pc.example", "the RD Gateway gw.example").
+    pub target: &'a str,
+    pub username: Option<&'a str>,
+    pub domain: Option<&'a str>,
+    pub can_remember: bool,
+    pub failed_before: bool,
+    /// Shown below the request (a server that declined NLA).
+    pub warning: Option<&'a str>,
+}
+
 /// Ask for a user name and password. `None` = cancelled.
 pub fn credentials(
     parent: &impl IsA<gtk::Widget>,
-    target: &str,
-    username: Option<&str>,
-    domain: Option<&str>,
-    can_remember: bool,
-    failed_before: bool,
+    prompt: CredentialPrompt<'_>,
     done: impl FnOnce(Option<EnteredCredentials>) + 'static,
 ) {
-    let body = if failed_before {
+    let CredentialPrompt {
+        target,
+        username,
+        domain,
+        can_remember,
+        failed_before,
+        warning,
+    } = prompt;
+    let mut body = if failed_before {
         format!("The user name or password for {target} wasn't accepted. Try again.")
     } else {
         format!("Log in to {target}.")
     };
+    if let Some(w) = warning {
+        body = format!("{body}\n\n{w}");
+    }
     let dialog = adw::AlertDialog::new(Some("Authentication Required"), Some(&body));
     let group = adw::PreferencesGroup::new();
     let user = adw::EntryRow::builder()
@@ -207,7 +227,10 @@ pub fn confirm_untrusted(
     };
     row("Computer", &profile.address());
     if let Some(u) = profile.username.as_deref().filter(|u| !u.is_empty()) {
-        row("User", u);
+        match profile.domain.as_deref().filter(|d| !d.is_empty()) {
+            Some(d) => row("User", &format!("{d}\\{u}")),
+            None => row("User", u),
+        }
     }
     if let Some(g) = profile.gateway.as_ref().filter(|g| !g.host.is_empty()) {
         let gw = transom_view::core::rdpfile::join_host_port(&g.host, g.port);
@@ -316,7 +339,7 @@ fn name_and_host(name: &str, host: &str, port: u16) -> Option<(String, String, u
         h => (name, h),
     };
     let (host, typed) = split_host_port(address)?;
-    (!host.is_empty() && typed != Some(0)).then(|| (name.to_string(), host, typed.unwrap_or(port)))
+    (valid_host(&host) && typed != Some(0)).then(|| (name.to_string(), host, typed.unwrap_or(port)))
 }
 
 /// Edit (or create) a profile.
@@ -398,6 +421,31 @@ pub fn profile_editor(
 
     let security = adw::PreferencesGroup::builder().title("Security").build();
     let sec = combo("Protocol Security", SECURITY_CHOICES, profile.security);
+    // Legacy RDP security has no certificate, and with it allowed anyone on the
+    // network can make the connection use it. TLS Only sends the password to the
+    // server directly. Say so while one of them is chosen.
+    let explain = |sec: &adw::ComboRow| {
+        let (text, warn) =
+            match SECURITY_CHOICES[sec.selected() as usize % SECURITY_CHOICES.len()].1 {
+                SecurityMode::Rdp => (
+                    "Insecure: anyone on the network can read your password and the session",
+                    true,
+                ),
+                SecurityMode::Tls => (
+                    "Your password goes to the server directly; NLA is safer when it supports it",
+                    false,
+                ),
+                _ => ("", false),
+            };
+        sec.set_subtitle(text);
+        if warn {
+            sec.add_css_class("warning");
+        } else {
+            sec.remove_css_class("warning");
+        }
+    };
+    explain(&sec);
+    sec.connect_selected_notify(explain);
     let ignore_cert = adw::SwitchRow::builder()
         .title("Ignore Certificate Problems")
         .subtitle("Insecure: anyone on the network could impersonate this server")

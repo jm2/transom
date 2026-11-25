@@ -49,7 +49,9 @@ GtkWidget *transom_view_new (void);
  * @username: (nullable): user name
  * @domain: (nullable): domain
  * @password: (nullable): password; if %NULL, #TransomView::credentials-required is
- *   emitted when the server asks
+ *   emitted when the server asks. It's sent only with Network Level Authentication:
+ *   a server that declines NLA gets #TransomView::credentials-required instead, so
+ *   the user decides. The strings are copied; the caller may clear them right away.
  * @error: return location for a #GError
  *
  * Starts connecting. The remote desktop is sized to the widget in device pixels and
@@ -114,9 +116,9 @@ void transom_view_answer_certificate (TransomView *self, TransomCertDecision dec
  * @self: a #TransomView
  * @username: user name
  * @domain: (nullable): domain
- * @password: password
+ * @password: (nullable): password (%NULL: none)
  *
- * Answers the pending #TransomView::credentials-required.
+ * Answers the pending #TransomView::credentials-required. The strings are copied.
  */
 void transom_view_answer_credentials (TransomView *self,
                                       const char  *username,

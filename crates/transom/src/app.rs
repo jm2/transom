@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! Application setup, shared state, command line and `rdp://` / `.rdp` handling.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -40,6 +40,10 @@ pub struct AppState {
     pub draining: RefCell<Vec<Finished>>,
     sessions: RefCell<Vec<Rc<Session>>>,
     windows: RefCell<Vec<Rc<MainWindow>>>,
+    /// The last keyring change queued (`secret_op`), which the next one waits for.
+    last_secret_op: RefCell<Option<glib::JoinHandle<()>>>,
+    /// Keyring changes queued and not finished yet; `shutdown` waits for them.
+    pending_secret_ops: Rc<Cell<usize>>,
 }
 
 impl std::fmt::Debug for AppState {
@@ -49,6 +53,22 @@ impl std::fmt::Debug for AppState {
 }
 
 impl AppState {
+    /// Run a keyring change after the ones queued before it, so the last choice
+    /// (save, forget, delete) is what stays, even when one waits on an unlock prompt.
+    pub fn secret_op(&self, op: impl std::future::Future<Output = ()> + 'static) {
+        let previous = self.last_secret_op.borrow_mut().take();
+        let pending = self.pending_secret_ops.clone();
+        pending.set(pending.get() + 1);
+        let handle = glib::spawn_future_local(async move {
+            if let Some(p) = previous {
+                let _ = p.await;
+            }
+            op.await;
+            pending.set(pending.get() - 1);
+        });
+        *self.last_secret_op.borrow_mut() = Some(handle);
+    }
+
     fn new() -> Self {
         let config = glib::user_config_dir().join("transom");
         let trust_path = config.join("known-hosts.toml");
@@ -78,6 +98,8 @@ impl AppState {
             draining: RefCell::new(Vec::new()),
             sessions: RefCell::new(Vec::new()),
             windows: RefCell::new(Vec::new()),
+            last_secret_op: RefCell::new(None),
+            pending_secret_ops: Rc::new(Cell::new(0)),
         }
     }
 
@@ -132,6 +154,20 @@ impl AppState {
             if !f.wait(left) {
                 tracing::warn!("an RDP engine did not shut down in time");
             }
+        }
+        // Let queued keyring changes finish (a forgotten password must not stay
+        // saved because the app quit first). The main loop has stopped, so run its
+        // context here, bounded: a keyring that waits on an unlock prompt can't hold
+        // up the exit for long.
+        let ctx = glib::MainContext::default();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while self.pending_secret_ops.get() > 0 && Instant::now() < deadline {
+            if !ctx.iteration(false) {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+        if self.pending_secret_ops.get() > 0 {
+            tracing::warn!("a saved-password change didn't finish before exit");
         }
     }
 }
