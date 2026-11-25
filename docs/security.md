@@ -30,15 +30,20 @@ What Transom protects, from whom, and where it falls short. Report problems as
 - Passwords go to the system keyring (Secret Service, Keychain or Credential Manager)
   only when you ask: Remember Password is off by default. They are never passed on a
   command line or in the environment.
-- Copies are offered to the remote computer only while the session has focus: what
-  you copy in other apps meanwhile is offered when you come back to it, and a copy
-  stays available to the remote until you copy something else. Its copies reach your
-  clipboard only while the session has focus, too.
-- Entries a password manager marks as concealed (with KDE's or macOS's clipboard
-  markers, so on Linux and macOS) are neither offered nor sent to the remote computer,
-  including one copied while the remote is reading the clipboard. On Windows, password
-  managers' markers aren't recognised yet, and a copy made during such a read can slip
-  through ([#21](https://github.com/jm2/transom/issues/21)).
+- The remote computer can read your clipboard only while the session has focus (in
+  multi-monitor mode, any of its windows), and only what was offered to it: what you
+  copy in other apps is offered when you come back to the session, not before. The
+  one exception is the files of a copy you offered: the remote can go on reading
+  those while you work elsewhere, so that a paste in progress finishes, but not files
+  you copied later. Its copies reach your clipboard only while the session has focus,
+  too.
+- Entries a password manager marks as concealed are neither offered nor sent to the
+  remote computer, including one copied while the remote is reading the clipboard.
+  Transom recognises KDE's marker on Linux, and on macOS the concealed and transient
+  markers, which it reads from the pasteboard itself.
+- On Windows, password managers' markers aren't recognised yet, and a copy made while
+  the remote is reading the clipboard can slip through to it
+  ([#21](https://github.com/jm2/transom/issues/21)).
 
 ## Devices
 
@@ -60,9 +65,12 @@ These permissions apply to every connection, not just the one that asked.
 
 FreeRDP (the protocol, its codecs and every channel: clipboard, drives, printers,
 smart cards, USB, audio), FFmpeg's H.264 decoder and VA-API decoding run on a thread
-inside the Transom process. So do GTK and GDK-Pixbuf, which decode the images a server
-puts on the clipboard. A memory-safety bug a server can trigger in any of them runs
-with Transom's privileges, next to your saved passwords and certificate trust.
+inside the Transom process. So does GTK, though little of what a server sends reaches
+its parsers: a PNG a server puts on the clipboard is passed undecoded to the
+application you paste it into (bitmaps are converted by Transom's own Rust code), and
+reaches GDK's PNG loader (libpng) only on read-back, when Transom offers it to another
+session's server. A memory-safety bug a server can trigger in any of them runs with
+Transom's privileges, next to your saved passwords and certificate trust.
 
 | Package | What contains an exploited engine |
 |---|---|
