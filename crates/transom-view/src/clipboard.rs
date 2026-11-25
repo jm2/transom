@@ -955,23 +955,9 @@ fn read_range(f: &LocalFile, offset: u64, len: u32) -> Option<Vec<u8>> {
 /// from that handle, so a folder swapped for a link meanwhile isn't followed.
 #[cfg(unix)]
 fn walk_roots(roots: &[PathBuf]) -> Vec<LocalFile> {
-    use rustix::fs::{Mode, OFlags};
-    use std::os::fd::AsFd;
     let mut walk = Walk::default();
     for r in roots {
-        let (Some(name), Some(parent)) = (r.file_name(), r.parent()) else {
-            continue;
-        };
-        let parent = if parent.as_os_str().is_empty() {
-            Path::new(".")
-        } else {
-            parent
-        };
-        let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC;
-        if let Ok(dir) = rustix::fs::open(parent, flags, Mode::empty()) {
-            let rel = name.to_string_lossy().into_owned();
-            walk.entry(dir.as_fd(), name, r.clone(), rel);
-        }
+        walk.root(r);
     }
     if walk.skipped > 0 {
         tracing::debug!(
@@ -991,6 +977,59 @@ struct Walk {
 
 #[cfg(unix)]
 impl Walk {
+    /// A path the user copied. It's looked at by path, which needs only search
+    /// permission on its folder (as any file the user picked); a folder is then opened
+    /// without following a link, checked to be the one looked at, and walked from
+    /// that handle.
+    fn root(&mut self, path: &Path) {
+        use rustix::fs::{Mode, OFlags};
+        use std::os::unix::fs::MetadataExt;
+        if self.out.len() >= clipboard::MAX_FILES {
+            return;
+        }
+        let Some(name) = path.file_name() else {
+            return;
+        };
+        let rel = name.to_string_lossy().into_owned();
+        let Ok(meta) = std::fs::symlink_metadata(path) else {
+            return;
+        };
+        let id = (meta.dev(), meta.ino());
+        let ft = meta.file_type();
+        if ft.is_file() {
+            self.out.push(LocalFile {
+                path: path.to_path_buf(),
+                desc: FileDescriptor {
+                    path: rel,
+                    size: meta.len(),
+                    is_dir: false,
+                },
+                id,
+            });
+        } else if ft.is_dir() {
+            let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+            let fd = rustix::fs::open(path, flags, Mode::empty())
+                .ok()
+                .filter(|fd| rustix::fs::fstat(fd).is_ok_and(|st| stat_id(&st) == id));
+            let Some(fd) = fd else {
+                self.skipped += 1; // swapped for something else since
+                return;
+            };
+            self.out.push(LocalFile {
+                path: path.to_path_buf(),
+                desc: FileDescriptor {
+                    path: rel.clone(),
+                    size: 0,
+                    is_dir: true,
+                },
+                id,
+            });
+            self.dir(&fd, path, &rel);
+        } else {
+            self.skipped += 1;
+        }
+    }
+
     /// `name` in the directory open at `dir` (at `path`, offered as `rel`): a regular
     /// file is listed, a directory listed and walked, anything else skipped.
     fn entry(
@@ -1512,6 +1551,22 @@ mod tests {
         if fifo {
             assert!(dir.join("fifo").exists());
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_copy_from_a_folder_that_can_only_be_searched_is_offered() {
+        use std::os::unix::fs::PermissionsExt;
+        let t = Scratch::new("searchonly");
+        let folder = t.0.join("folder");
+        std::fs::create_dir_all(folder.join("sub")).unwrap();
+        std::fs::write(folder.join("a.txt"), "offered").unwrap();
+        std::fs::write(folder.join("sub").join("b.txt"), "offered").unwrap();
+        std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o711)).unwrap();
+        let out = walk_roots(&[folder.join("a.txt"), folder.join("sub")]);
+        std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let names: Vec<_> = out.iter().map(|f| f.desc.path.as_str()).collect();
+        assert_eq!(names, ["a.txt", "sub", "sub/b.txt"]);
     }
 
     #[cfg(unix)]
