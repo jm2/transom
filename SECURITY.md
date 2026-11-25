@@ -19,13 +19,17 @@ The latest release. Fixes ship as a new release.
 ## Bundled libraries
 
 The AppImage, macOS and Windows packages contain their own FreeRDP, FFmpeg, OpenSSL
-and other libraries (from Debian 13, Homebrew and MSYS2), and the Flatpak builds
-FreeRDP from a pinned source, so none of them gets your distribution's security
-updates. When FreeRDP, FFmpeg, OpenSSL or another library that handles what a server
-sends publishes a security fix, Transom rebuilds and releases these packages. The
-weekly [Bundled libraries](.github/workflows/bundled-libraries.yml) workflow opens an
-issue when their versions move. The .deb, .rpm and Arch packages use the system's
-libraries and get fixes from the distribution.
+and other libraries, and the Flatpak builds FreeRDP from a pinned source, so none of
+them gets your distribution's security updates. The AppImage builds FreeRDP from the
+same pinned source as the Flatpak and takes the rest from Debian 13; the macOS and
+Windows packages take theirs from Homebrew and MSYS2. When FreeRDP, FFmpeg, OpenSSL
+or another library that handles what a server sends publishes a security fix, Transom
+rebuilds and releases these packages. The weekly
+[Bundled libraries](.github/workflows/bundled-libraries.yml) workflow opens an issue
+when their versions move. The .deb, .rpm and Arch packages use the system's libraries
+and get fixes from the distribution; they require FreeRDP 3.33.1 or later, as older
+releases have known security problems a server can exploit (on Debian 13, the .deb
+takes it from trixie-backports).
 
 ## Security model
 

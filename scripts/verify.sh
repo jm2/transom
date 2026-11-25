@@ -42,6 +42,7 @@ fi
 step "script tests"
 python3 -I scripts/test_release_check.py
 python3 -I scripts/test_unsafe_inventory.py
+python3 -I scripts/test_bundled_versions.py
 
 step "unsafe sites justified (docs/unsafe-review.md)"
 summary=$(python3 -I scripts/unsafe-inventory.py | tail -1)

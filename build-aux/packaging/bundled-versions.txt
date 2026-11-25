@@ -6,8 +6,6 @@ debian	libavcodec61	7:7.1.5-0+deb13u1
 debian	libavutil59	7:7.1.5-0+deb13u1
 debian	libcups2t64	2.4.10-3+deb13u2
 debian	libdav1d7	1.5.1-1
-debian	libfreerdp-client3-3	3.15.0+dfsg-2.1+deb13u3
-debian	libfreerdp3-3	3.15.0+dfsg-2.1+deb13u3
 debian	libgdk-pixbuf-2.0-0	2.42.12+dfsg-4+deb13u1
 debian	libglib2.0-0t64	2.84.4-3~deb13u5
 debian	libgnutls30t64	3.8.9-3+deb13u4
@@ -21,8 +19,9 @@ debian	libssl3t64	3.5.9-1~deb13u1
 debian	libswresample5	7:7.1.5-0+deb13u1
 debian	libswscale8	7:7.1.5-0+deb13u1
 debian	libtiff6	4.7.0-3+deb13u3
+debian	libva-drm2	2.22.0-3
+debian	libva2	2.22.0-3
 debian	libwebp7	1.5.0-0.1
-debian	libwinpr3-3	3.15.0+dfsg-2.1+deb13u3
 debian	libxml2	2.12.7+dfsg+really2.9.14-2.1+deb13u3
 debian	libzstd1	1.5.7+dfsg-1+deb13u1
 flatpak	freerdp	3.33.1
@@ -40,7 +39,7 @@ homebrew	libpng	1.6.59
 homebrew	librsvg	2.63.4_1
 homebrew	libtiff	4.7.2
 homebrew	libxml2	2.15.4
-homebrew	openssl@3	3.5.9
+homebrew	openssl@4	4.1.0
 homebrew	webp	1.6.0
 homebrew	zstd	1.5.7_1
 msys2	dav1d	1.5.5-1

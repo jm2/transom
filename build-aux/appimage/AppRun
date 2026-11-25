@@ -64,4 +64,9 @@ if [ -z "${LIBVA_DRIVERS_PATH:-}" ]; then
     fi
 fi
 
+# FreeRDP needs nothing here: build-aux/appimage/build-freerdp.sh builds every channel
+# in, has a plugin loaded by file name from next to the library rather than from a
+# fixed directory, and leaves its system configuration in the host's /etc, as a
+# distribution's build does.
+
 exec "$HERE/usr/bin/transom" "$@"

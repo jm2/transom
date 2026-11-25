@@ -3,11 +3,13 @@
 """Track the security-relevant libraries inside Transom's self-contained packages.
 
 The AppImage (Debian 13 packages), macOS (Homebrew) and Windows (MSYS2) packages
-bundle FreeRDP, FFmpeg, OpenSSL and the libraries that parse what a server sends
-(images, XML, Kerberos, ...); the Flatpak builds FreeRDP and pcsc-lite from pinned
-sources. None of them gets a distribution's security updates: a fix reaches users
-only when Transom is rebuilt and released (SECURITY.md). This script compares what
-those sources offer now with build-aux/packaging/bundled-versions.txt, the versions
+bundle FFmpeg, OpenSSL and the libraries that parse what a server sends (images,
+XML, Kerberos, ...), and the macOS and Windows packages FreeRDP too; the Flatpak
+builds FreeRDP and pcsc-lite from pinned sources, and the AppImage builds the same
+FreeRDP (build-aux/appimage/build-freerdp.sh reads the Flatpak manifest's pin). None
+of them gets a distribution's security updates: a fix reaches users only when
+Transom is rebuilt and released (SECURITY.md). This script compares what those
+sources offer now with build-aux/packaging/bundled-versions.txt, the versions
 recorded at the last release:
 
   scripts/bundled-versions.py --check   # print the changes (Markdown); exit 3 if any
@@ -35,10 +37,11 @@ ROOT = Path(__file__).resolve().parent.parent
 BASELINE = ROOT / "build-aux/packaging/bundled-versions.txt"
 MANIFEST = ROOT / "build-aux/flatpak/io.github.jm2.Transom.yml"
 
-# Code a hostile server's data reaches, or that secures the connection.
+# Code a hostile server's data reaches, or that secures the connection. (The
+# AppImage's FreeRDP isn't Debian's: it is the Flatpak's pin, below.)
 DEBIAN = [
-    "libfreerdp3-3", "libfreerdp-client3-3", "libwinpr3-3",
     "libavcodec61", "libavutil59", "libswscale8", "libswresample5", "libdav1d7",
+    "libva2", "libva-drm2",
     "libssl3t64", "libgnutls30t64", "libkrb5-3",
     "libxml2", "libpng16-16t64", "libjpeg62-turbo", "libtiff6", "libwebp7",
     "libgdk-pixbuf-2.0-0", "librsvg2-2", "libglib2.0-0t64", "libgtk-4-1",
@@ -50,12 +53,13 @@ MSYS2 = [  # base names; the CLANG64 and CLANGARM64 builds share versions (no kr
     "libxml2", "libpng", "libjpeg-turbo", "libtiff", "libwebp",
     "gdk-pixbuf2", "librsvg", "glib2", "gtk4", "zstd",
 ]
-HOMEBREW = [
-    "freerdp", "ffmpeg", "dav1d", "openssl@3", "gnutls", "krb5",
+HOMEBREW = [  # openssl@4: what freerdp and ffmpeg link (nothing bundled uses openssl@3)
+    "freerdp", "ffmpeg", "dav1d", "openssl@4", "gnutls", "krb5",
     "libxml2", "libpng", "jpeg-turbo", "libtiff", "webp",
     "gdk-pixbuf", "librsvg", "glib", "gtk4", "zstd",
 ]
 # The Flatpak's pinned sources: manifest URL pattern, and where upstream releases.
+# FreeRDP's pin is the AppImage's too.
 FLATPAK = {
     "freerdp": (r"freerdp-(\d[\d.]*)\.tar", "FreeRDP/FreeRDP", "releases"),
     "pcsc-lite": (r"pcsc-lite-(\d[\d.]*)\.tar", "LudovicRousseau/PCSC", "tags"),
@@ -176,7 +180,7 @@ SOURCE_NAMES = {
     "debian": "Debian 13 (AppImage)",
     "msys2": "MSYS2 (Windows)",
     "homebrew": "Homebrew (macOS)",
-    "flatpak": "Flatpak (pinned in the manifest)",
+    "flatpak": "Flatpak and AppImage (pinned in the Flatpak manifest)",
 }
 
 

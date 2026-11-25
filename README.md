@@ -39,7 +39,7 @@ GTK app runs on macOS and Windows.
 | Clipboard: text, HTML, images and files, both ways | ✅ |
 | Remote audio and microphone | ✅ Windows Server 2025 doesn't open the microphone ([known issue](docs/known-issues.md)) |
 | RD Gateway (HTTP, RPC over HTTP, WebSocket) | ✅ |
-| Kerberos single sign-on and Remote Credential Guard | ✅ Needs a FreeRDP with MS-RDPEAR (the Flatpak has it) |
+| Kerberos single sign-on and Remote Credential Guard | ✅ Needs a FreeRDP with MS-RDPEAR (the Flatpak and the AppImage have it) |
 | Folders as drives, printers, smart cards | ✅ |
 | USB devices | ✅ Linux ([setup](docs/usb.md)); 🚧 macOS and Windows |
 | Serial ports | ⚠️ Windows accepts the port but doesn't expose it ([known issue](docs/known-issues.md)) |
@@ -70,7 +70,9 @@ Known limitations are listed in [docs/known-issues.md](docs/known-issues.md).
   memory-safe engine (IronRDP), first for connections from files and links
   ([#20](https://github.com/jm2/transom/issues/20)).
 - **Bundled libraries:** the AppImage, macOS and Windows packages carry their own FreeRDP,
-  FFmpeg and OpenSSL, and are rebuilt and released when those publish security fixes.
+  FFmpeg and OpenSSL, and are rebuilt and released when those publish security fixes (the
+  AppImage's and the Flatpak's FreeRDP is built from the same pinned upstream release). The
+  `.deb`, `.rpm` and Arch packages require the system's FreeRDP to be 3.33.1 or newer.
 
 [docs/security.md](docs/security.md) has the details; report problems as
 [SECURITY.md](SECURITY.md) describes.
@@ -123,15 +125,42 @@ gh attestation verify transom-amd64.deb --repo jm2/transom \
 |---|---|---|
 | Linux (x86_64, aarch64) | `transom-linux-*.flatpak` | `flatpak install --user transom-linux-x86_64.flatpak` |
 | Linux with glibc 2.39+: Ubuntu 24.04+, Debian 13+, Fedora 42+, Arch, openSUSE Tumbleweed (x86_64, aarch64) | `transom-linux-*.AppImage` | `chmod +x transom-linux-x86_64.AppImage`, then run it |
-| Debian 13+, Ubuntu 25.10+ | `transom-amd64.deb`, `transom-arm64.deb` | `sudo apt install ./transom-amd64.deb` |
+| Debian 13, with trixie-backports | `transom-amd64.deb`, `transom-arm64.deb` | `sudo apt install -t trixie-backports ./transom-amd64.deb` (see below) |
 | Fedora 44+ | `transom-x86_64.rpm`, `transom-aarch64.rpm` | `sudo dnf install ./transom-x86_64.rpm` |
 | Arch Linux | `transom-x86_64.pkg.tar.zst` | `sudo pacman -U transom-x86_64.pkg.tar.zst` |
 | macOS 13+ (Apple silicon) | `transom-macos-aarch64.dmg` | Drag to Applications. The app isn't notarised yet: when macOS blocks the first launch, choose **Open Anyway** in System Settings → Privacy & Security |
 | Windows 10/11 (x64, arm64) | `transom-windows-*-setup.exe`, `.zip` | Run the installer (it can register `.rdp` files and `rdp://` links), or unzip and run `bin\transom.exe` |
 
-Debian 12, Ubuntu 24.04 and Ubuntu 25.04 ship a FreeRDP that is too old (Transom needs 3.15 or
-newer); use the Flatpak there, or on Ubuntu the AppImage, which brings its own. The AppImage
-mounts itself with FUSE (without it, run it with `--appimage-extract-and-run`), and doesn't
+The `.deb`, `.rpm` and Arch packages use the system's FreeRDP and require 3.33.1 or newer:
+older releases have known security problems that a hostile server can exploit. Debian 13's
+own FreeRDP is 3.15, so on Debian 13 the `.deb` takes FreeRDP from trixie-backports:
+
+```sh
+echo 'deb http://deb.debian.org/debian trixie-backports main' \
+    | sudo tee /etc/apt/sources.list.d/trixie-backports.list
+sudo apt update
+sudo apt install -t trixie-backports ./transom-amd64.deb
+```
+
+Keep `-t trixie-backports`: without it apt stays with Debian 13's FreeRDP and refuses the
+package. FreeRDP's later backports updates then arrive with the usual `apt upgrade`.
+
+Ubuntu's FreeRDP is too old for the `.deb` (Ubuntu 25.10 has 3.16, 26.04 has 3.32.2): use the
+AppImage or the Flatpak there. Both bring their own FreeRDP, built from the same pinned source.
+Debian 12's FreeRDP is too old too, and its glibc (2.36) too old for the AppImage: use the
+Flatpak.
+
+The AppImage mounts itself with FUSE. Where FUSE is missing, don't use a plain
+`--appimage-extract-and-run`: it unpacks the image into a predictable directory under `$TMPDIR`
+(or `/tmp`) and reuses whatever it finds there, which another user of the computer could have
+put there first. Unpack it where only you can write instead, either for each run:
+
+```sh
+TMPDIR="$XDG_RUNTIME_DIR" ./transom-linux-x86_64.AppImage --appimage-extract-and-run
+```
+
+or once, with `./transom-linux-x86_64.AppImage --appimage-extract` in a directory of your own
+(it writes `squashfs-root/` there), then run `squashfs-root/AppRun`. The AppImage doesn't
 register `rdp://` links or `.rdp` files by itself; an AppImage integration tool can. Fedora
 COPR, AUR, winget and Flathub packages are planned after v0.1.0.
 
@@ -140,7 +169,9 @@ COPR, AUR, winget and Flathub packages are planned after v0.1.0.
 ## Building from source
 
 Requirements everywhere: Rust 1.98 or newer, GTK 4.16, libadwaita 1.6, FreeRDP 3.15,
-FFmpeg (libavcodec), and libclang for the bindings.
+FFmpeg (libavcodec), and libclang for the bindings. Transom builds against FreeRDP 3.15, but
+use 3.33.1 or newer for anything you connect with: older releases have known security
+problems a hostile server can exploit, and the build warns about them.
 
 ### Linux
 
@@ -151,11 +182,12 @@ sudo dnf install gcc clang-devel pkgconf-pkg-config freerdp-devel libwinpr-devel
     gtk4-devel libadwaita-devel libsecret-devel libavcodec-free-devel libavutil-free-devel
 ```
 
-Debian 13 / Ubuntu 25.10:
+Debian 13 (FreeRDP from trixie-backports, enabled as in [Installation](#installation)):
 
 ```sh
 sudo apt install build-essential pkg-config clang libclang-dev libgtk-4-dev \
-    libadwaita-1-dev freerdp3-dev libwinpr3-dev libsecret-1-dev libavcodec-dev libavutil-dev
+    libadwaita-1-dev libsecret-1-dev libavcodec-dev libavutil-dev
+sudo apt install -t trixie-backports freerdp3-dev libwinpr3-dev
 ```
 
 Arch Linux:
@@ -204,8 +236,10 @@ scripts/build-linux.sh --appimage   # dist/transom-linux-x86_64.AppImage
 
 The AppImage bundles the libraries of the system it's built on, so build it on Debian 13
 (elsewhere, in a `debian:trixie` container), as the release workflow does: the result runs
-on glibc 2.39 and later. `build-aux/appimage/` has the build script, the entry point and the
-list of libraries left to the host.
+on glibc 2.39 and later. FreeRDP is the exception: the script first builds the release the
+Flatpak pins, from its checked source and with the Flatpak's patches and options, and bundles
+that instead of Debian's. `build-aux/appimage/` has the build scripts, the entry point and
+the list of libraries left to the host.
 
 ### macOS
 

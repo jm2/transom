@@ -12,7 +12,9 @@ arch=('x86_64' 'aarch64')
 url="https://github.com/jm2/transom"
 license=('GPL-3.0-or-later' 'Apache-2.0')
 options=('!lto' '!debug')
-depends=('freerdp>=3.15' 'gtk4>=4.16' 'libadwaita>=1.6' 'libsecret' 'ffmpeg' 'hicolor-icon-theme')
+# FreeRDP 3.33.1 or later: older releases have known security problems a server can
+# exploit. Arch's freerdp carries epoch 2 (a floor without it would accept any release).
+depends=('freerdp>=2:3.33.1' 'gtk4>=4.16' 'libadwaita>=1.6' 'libsecret' 'ffmpeg' 'hicolor-icon-theme')
 optdepends=('libva-mesa-driver: hardware H.264 decoding on AMD (zero-copy video)'
             'intel-media-driver: hardware H.264 decoding on Intel (zero-copy video)'
             'vulkan-icd-loader: GTK''s Vulkan renderer, needed to show hardware-decoded video')

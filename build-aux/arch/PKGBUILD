@@ -7,7 +7,9 @@ pkgdesc="Sharp remote desktops over RDP (GTK 4, HiDPI-correct)"
 arch=(x86_64 aarch64)
 url="https://github.com/jm2/transom"
 license=(GPL-3.0-or-later Apache-2.0)
-depends=(freerdp gtk4 libadwaita libsecret hicolor-icon-theme ffmpeg)
+# FreeRDP 3.33.1 or later: older releases have known security problems a server can
+# exploit. Arch's freerdp carries epoch 2.
+depends=('freerdp>=2:3.33.1' gtk4 libadwaita libsecret hicolor-icon-theme ffmpeg)
 optdepends=('libva-mesa-driver: hardware H.264 decoding on AMD (zero-copy video)'
             'intel-media-driver: hardware H.264 decoding on Intel (zero-copy video)'
             'vulkan-icd-loader: GTK''s Vulkan renderer, needed to show hardware-decoded video')

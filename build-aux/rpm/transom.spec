@@ -19,9 +19,15 @@ Source1:        %{name}-%{upstream_version}-vendor.tar.xz
 BuildRequires:  cargo >= 1.98
 BuildRequires:  rust >= 1.98
 BuildRequires:  clang-devel
-BuildRequires:  pkgconfig(freerdp3) >= 3.15
-BuildRequires:  pkgconfig(freerdp-client3)
-BuildRequires:  pkgconfig(winpr3)
+# FreeRDP 3.33.1 or later: older releases have known security problems a server can
+# exploit. The library dependencies RPM finds itself (libfreerdp3.so.3, ...) don't
+# say which release, so the runtime floor is explicit too; Fedora's FreeRDP packages
+# carry epoch 2.
+BuildRequires:  pkgconfig(freerdp3) >= 3.33.1
+BuildRequires:  pkgconfig(freerdp-client3) >= 3.33.1
+BuildRequires:  pkgconfig(winpr3) >= 3.33.1
+Requires:       freerdp-libs%{?_isa} >= 2:3.33.1
+Requires:       libwinpr%{?_isa} >= 2:3.33.1
 # Zero-copy H.264 (VA-API through libavcodec). Fedora's libavcodec-free has no native
 # H.264 decoder, so this engages only with a full libavcodec (e.g. RPM Fusion's
 # libavcodec-freeworld, same soname); otherwise FreeRDP decodes in software.

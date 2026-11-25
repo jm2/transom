@@ -38,9 +38,12 @@ windows-native-keyring-store = "1.1"
 embed-resource = "3.0"
 winresource = "0.1"
 
-# Release packages (as Tributary/Balun): `cargo deb -p transom` (Debian 13+ / Ubuntu
-# 25.10+: FreeRDP >= 3.15) and `cargo generate-rpm -p crates/transom`. The distro
-# packages in build-aux/ (RPM spec, PKGBUILD) build from source instead.
+# Release packages (as Tributary/Balun): `cargo deb -p transom` and `cargo generate-rpm
+# -p crates/transom`. The distro packages in build-aux/ (RPM spec, PKGBUILD) build from
+# source instead. Every package requires FreeRDP 3.33.1 or later: older releases have
+# known security problems a server can exploit (Debian 13's 3.15 among them; its
+# trixie-backports has 3.33.1, which the .deb is built against). Fedora's and Arch's
+# FreeRDP packages carry epoch 2, so their floors say 2:3.33.1.
 [package.metadata.deb]
 maintainer = "John-Michael Mulesa <jmulesa@gmail.com>"
 extended-description = """\
@@ -51,7 +54,7 @@ copyright = "2026, Transom contributors"
 license-file = ["../../COPYING", "0"]
 section = "net"
 priority = "optional"
-depends = "$auto, libgtk-4-1 (>= 4.16), libadwaita-1-0 (>= 1.6), libfreerdp3-3 (>= 3.15), libfreerdp-client3-3 (>= 3.15)"
+depends = "$auto, libgtk-4-1 (>= 4.16), libadwaita-1-0 (>= 1.6), libfreerdp3-3 (>= 3.33.1), libfreerdp-client3-3 (>= 3.33.1), libwinpr3-3 (>= 3.33.1)"
 assets = [
   ["target/release/transom", "usr/bin/", "755"],
   ["../../data/io.github.jm2.Transom.desktop", "usr/share/applications/", "644"],
@@ -93,7 +96,8 @@ assets = [
 [package.metadata.generate-rpm.requires]
 gtk4 = ">= 4.16"
 libadwaita = ">= 1.6"
-freerdp-libs = ">= 3.15"
+freerdp-libs = ">= 2:3.33.1"
+libwinpr = ">= 2:3.33.1"
 libsecret = "*"
 
 [lints]

@@ -16,8 +16,9 @@ Bundled libraries
 -----------------
 The macOS, Windows and AppImage packages also bundle native libraries built by
 Homebrew (macOS), MSYS2 (Windows) or Debian (the AppImage, from Debian 13); the
-other Linux packages use the system's copies. Their own licences apply to them.
-The main ones:
+AppImage's FreeRDP is built by Transom itself, from the upstream release its
+Flatpak builds. The other Linux packages use the system's copies. Their own
+licences apply to them. The main ones:
 
 - GTK 4, GLib, Pango, Cairo, HarfBuzz, GDK-Pixbuf, libadwaita, librsvg:
   LGPL-2.1-or-later (HarfBuzz: MIT; Cairo: LGPL-2.1 or MPL-1.1)
@@ -32,7 +33,10 @@ The main ones:
 BUNDLED-PACKAGES.txt, next to this file, lists every MSYS2, Homebrew or Debian
 package the build bundled, with its exact version, the licence its packager
 declares (for Debian, its copyright file), where its source is, and what it
-provided. The licence files those packages ship are copied into licenses/.
+provided. The licence files those packages ship are copied into licenses/. In
+the AppImage it also describes the FreeRDP build: the release tarball and its
+SHA-256, the patches applied (copied into patches/), and the build options;
+FreeRDP's licence and notice files are in licenses/freerdp/.
 
 Source code
 -----------
@@ -45,7 +49,10 @@ The packagers publish the exact source of each bundled package:
 - AppImage: Debian's source package for that version (the "Source" line in
   BUNDLED-PACKAGES.txt, at https://sources.debian.org/; every version Debian has
   published stays available at https://snapshot.debian.org/) holds the upstream
-  source with Debian's patches and build recipe.
+  source with Debian's patches and build recipe. FreeRDP's source is the
+  upstream release tarball its "Source" line names (check it against the SHA-256
+  given), with the patches in patches/; the build recipe is
+  build-aux/appimage/build-freerdp.sh in Transom's source at the release's tag.
 - macOS: the upstream release the "Source" line names, built with Homebrew's
   formula for that version (the "Formula" line; the recipes are at
   https://github.com/Homebrew/homebrew-core, and the line gives the

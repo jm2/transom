@@ -4,7 +4,11 @@
 use std::env;
 use std::path::PathBuf;
 
+/// The oldest FreeRDP whose API Transom builds against.
 const MIN_FREERDP: &str = "3.15";
+/// The oldest FreeRDP without known security problems a server can exploit: what the
+/// packages require. An older one still builds, with a warning.
+const SAFE_FREERDP: &str = "3.33.1";
 
 fn main() {
     println!("cargo:rerun-if-changed=src/wrapper.h");
@@ -19,7 +23,7 @@ fn main() {
                 panic!(
                     "FreeRDP >= {MIN_FREERDP} development files not found ({lib}): {e}\n\
                      Fedora: sudo dnf install freerdp-devel libwinpr-devel\n\
-                     Debian 13 / Ubuntu 25.10: sudo apt install freerdp3-dev libwinpr3-dev\n\
+                     Debian 13: sudo apt install -t trixie-backports freerdp3-dev libwinpr3-dev\n\
                      Arch: sudo pacman -S freerdp\n\
                      macOS: brew install freerdp\n\
                      Windows (MSYS2): pacman -S mingw-w64-clang-x86_64-freerdp \
@@ -27,6 +31,14 @@ fn main() {
                      The scripts/build-* helpers check every dependency before building."
                 )
             });
+        if lib == "freerdp3" && version_older(&found.version, SAFE_FREERDP) {
+            println!(
+                "cargo:warning=FreeRDP {} is older than {SAFE_FREERDP}: it has known security \
+                 problems that a hostile server can exploit. Build against FreeRDP \
+                 {SAFE_FREERDP} or later (Debian 13: trixie-backports).",
+                found.version
+            );
+        }
         include_paths.extend(found.include_paths);
     }
 
@@ -171,6 +183,25 @@ fn hwdec_bindings() {
     let out = PathBuf::from(env::var("OUT_DIR").unwrap()).join("av_bindings.rs");
     bindings.write_to_file(&out).expect("writing bindings");
     println!("cargo:rustc-cfg=transom_hwdec");
+}
+
+/// Whether dotted version `have` is older than `want` (numeric components compared in
+/// order; a missing component counts as 0, and anything after the digits of a
+/// component, such as a pre-release suffix, is ignored).
+fn version_older(have: &str, want: &str) -> bool {
+    let parse = |v: &str| -> Vec<u64> {
+        v.split('.')
+            .map(|c| {
+                let digits: String = c.chars().take_while(char::is_ascii_digit).collect();
+                digits.parse().unwrap_or(0)
+            })
+            .collect()
+    };
+    let (mut h, mut w) = (parse(have), parse(want));
+    let n = h.len().max(w.len());
+    h.resize(n, 0);
+    w.resize(n, 0);
+    h < w
 }
 
 /// Clang arguments for the target. Rust's `*-pc-windows-gnullvm` triples have an
