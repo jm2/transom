@@ -145,9 +145,10 @@ sudo apt install -t trixie-backports ./transom-amd64.deb
 Keep `-t trixie-backports`: without it apt stays with Debian 13's FreeRDP and refuses the
 package. FreeRDP's later backports updates then arrive with the usual `apt upgrade`.
 
-Ubuntu's FreeRDP is too old for the `.deb` (Ubuntu 25.10 has 3.16, 26.04 has 3.32.2), and so
-is Debian 12's: use the AppImage or the Flatpak there. Both bring their own FreeRDP, built from
-the same pinned source.
+Ubuntu's FreeRDP is too old for the `.deb` (Ubuntu 25.10 has 3.16, 26.04 has 3.32.2): use the
+AppImage or the Flatpak there. Both bring their own FreeRDP, built from the same pinned source.
+Debian 12's FreeRDP is too old too, and its glibc (2.36) too old for the AppImage: use the
+Flatpak.
 
 The AppImage mounts itself with FUSE. Where FUSE is missing, don't use a plain
 `--appimage-extract-and-run`: it unpacks the image into a predictable directory under `$TMPDIR`
