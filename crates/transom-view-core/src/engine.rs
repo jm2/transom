@@ -190,8 +190,16 @@ pub enum AuthKind {
 #[derive(Debug)]
 pub struct AuthRequest {
     pub kind: AuthKind,
+    /// The computer asking: the server, after any redirection, or the RD Gateway.
+    pub host: String,
     pub username: Option<String>,
     pub domain: Option<String>,
+    /// The server didn't use Network Level Authentication, so the password goes to
+    /// it directly: inside TLS, or with legacy RDP security, which has no certificate
+    /// at all. Whoever answers TLS for this address (after a certificate warning) gets
+    /// it in the clear. A saved password is never sent this way without asking,
+    /// unless the profile chose that security explicitly.
+    pub unprotected: bool,
     pub reply: mpsc::SyncSender<Option<Credentials>>,
 }
 

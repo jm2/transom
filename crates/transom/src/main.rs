@@ -20,5 +20,7 @@ fn main() -> gtk::glib::ExitCode {
         )
         .with_writer(std::io::stderr)
         .init();
+    // Before GTK or FreeRDP load any DLL.
+    transom_view_freerdp::restrict_dll_search();
     app::run()
 }

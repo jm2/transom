@@ -7,6 +7,7 @@ use std::rc::{Rc, Weak};
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
 use transom_view::TransomView;
+use transom_view::core::config::SecurityMode;
 use transom_view::core::profile::Profile;
 use transom_view::core::rdpfile::RdpFile;
 use transom_view::core::secrecy::SecretString;
@@ -399,17 +400,20 @@ impl MainWindow {
         );
         add("screenshot", Box::new(|w| w.save_screenshot()));
         // For headless checks (TRANSOM_DEBUG_ACTIONS): accept a pending confirmation
-        // with its defaults (nothing extra shared).
-        add(
-            "confirm-connection",
-            Box::new(|w| {
-                let pending = w.pending_confirm.borrow_mut().take();
-                if let Some(d) = pending {
-                    d.emit_by_name::<()>("response", &[&"connect"]);
-                    d.force_close();
-                }
-            }),
-        );
+        // with its defaults (nothing extra shared). Window actions are exported on
+        // the session bus, so it exists only when those checks ask for it.
+        if std::env::var_os("TRANSOM_DEBUG_ACTIONS").is_some_and(|v| !v.is_empty()) {
+            add(
+                "confirm-connection",
+                Box::new(|w| {
+                    let pending = w.pending_confirm.borrow_mut().take();
+                    if let Some(d) = pending {
+                        d.emit_by_name::<()>("response", &[&"connect"]);
+                        d.force_close();
+                    }
+                }),
+            );
+        }
         add(
             "focus-chrome",
             Box::new(|w| {
@@ -646,9 +650,12 @@ impl MainWindow {
             .add_toast(adw::Toast::new(&glib::markup_escape_text(text)));
     }
 
-    /// Quick connect / command line: `host[:port]`, `user@host`, or an `rdp://` URI.
+    /// Quick connect: `host[:port]`, `user@host`, or an `rdp://` URI. A pasted link
+    /// is treated like one opened from elsewhere: it can carry settings (a gateway,
+    /// the microphone), so it's confirmed first.
     pub fn open_address(self: &Rc<Self>, text: &str) -> bool {
-        let uri = if text.contains("://") {
+        let link = text.contains("://");
+        let uri = if link {
             text.to_string()
         } else {
             format!("rdp://{text}")
@@ -657,6 +664,10 @@ impl MainWindow {
             .ok()
             .and_then(|f| Profile::from_rdp(&f))
         {
+            Some(p) if link => {
+                self.open_untrusted(p, "a pasted link", None);
+                true
+            }
             Some(p) => {
                 self.open_session(p, true, None);
                 true
@@ -699,6 +710,11 @@ impl MainWindow {
         password: Option<SecretString>,
     ) {
         self.window.present();
+        // Whoever sent the file or link chose the server: require NLA, so a server
+        // (or one impersonating it after a certificate warning) can't have the
+        // password sent to it directly.
+        let mut profile = profile;
+        profile.security = SecurityMode::Nla;
         let weak = Rc::downgrade(self);
         let dialog = dialogs::confirm_untrusted(&self.window, profile, source, move |p| {
             let Some(w) = weak.upgrade() else { return };

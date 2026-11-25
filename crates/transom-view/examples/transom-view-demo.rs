@@ -63,6 +63,7 @@ struct Args {
     clip_test: bool,
     file_clip_test: bool,
     multimon: bool,
+    security: SecurityMode,
 }
 
 fn parse() -> Result<Args, String> {
@@ -95,6 +96,7 @@ fn parse() -> Result<Args, String> {
         clip_test: false,
         file_clip_test: false,
         multimon: false,
+        security: SecurityMode::Negotiate,
     };
     while let Some(flag) = it.next() {
         let mut val = || it.next().ok_or(format!("{flag} needs a value"));
@@ -102,6 +104,16 @@ fn parse() -> Result<Args, String> {
             "--domain" => a.domain = Some(val()?),
             "--password-file" => a.password_file = Some(val()?),
             "--trust" => a.trust = Some(normalize_fingerprint(&val()?).ok_or("bad fingerprint")?),
+            // A server without NLA (xrdp) gets the password only with `tls`.
+            "--security" => {
+                a.security = match val()?.as_str() {
+                    "negotiate" => SecurityMode::Negotiate,
+                    "nla" => SecurityMode::Nla,
+                    "tls" => SecurityMode::Tls,
+                    "rdp" => SecurityMode::Rdp,
+                    _ => return Err("--security negotiate|nla|tls|rdp".into()),
+                }
+            }
             "--scale-mode" => {
                 a.scale_mode = match val()?.as_str() {
                     "match" => ScaleMode::MatchLocal,
@@ -300,7 +312,7 @@ fn build(app: &gtk::Application, args: Args, code: Rc<Cell<u8>>) {
         username: Some(args.user.clone()),
         domain: args.domain.clone(),
         password,
-        security: SecurityMode::Negotiate,
+        security: args.security,
         cert_policy: CertPolicy::Verify,
         scale_mode: args.scale_mode,
         fit_mode: args.fit,
@@ -959,7 +971,7 @@ fn build_multimon(app: &gtk::Application, args: Args, code: Rc<Cell<u8>>) {
         username: Some(args.user.clone()),
         domain: args.domain.clone(),
         password,
-        security: SecurityMode::Negotiate,
+        security: args.security,
         cert_policy: CertPolicy::Verify,
         scale_mode: args.scale_mode,
         fit_mode: args.fit,

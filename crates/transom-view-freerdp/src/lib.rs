@@ -27,3 +27,29 @@ mod gfxvideo;
 mod hwdec;
 
 pub use engine::{FreeRdpEngine, h264_available};
+
+/// Load DLLs only from the application's folder and the system's (Windows; elsewhere
+/// it does nothing). Call it first thing in `main`.
+///
+/// FreeRDP loads channel add-ins it doesn't have built in by bare file name (for
+/// example `librdpear-client.dll` for Kerberos sign-in), and Windows' default search
+/// then also tries the current folder and every folder on `PATH`. The current folder
+/// is wherever a double-clicked `.rdp` file was, next to whatever came with it.
+pub fn restrict_dll_search() {
+    #[cfg(windows)]
+    {
+        /// `LOAD_LIBRARY_SEARCH_DEFAULT_DIRS`: the application folder, System32, and
+        /// folders added with `AddDllDirectory`.
+        const LOAD_LIBRARY_SEARCH_DEFAULT_DIRS: u32 = 0x0000_1000;
+        // SAFETY: matches kernel32's `BOOL SetDefaultDllDirectories(DWORD)`.
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn SetDefaultDllDirectories(directory_flags: u32) -> i32;
+        }
+        // SAFETY: a documented kernel32 function (Windows 8+, and 7 with KB2533623)
+        // that takes a flags value and changes only the process's DLL search order.
+        if unsafe { SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_DEFAULT_DIRS) } == 0 {
+            tracing::warn!("couldn't restrict the DLL search path");
+        }
+    }
+}

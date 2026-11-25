@@ -136,8 +136,12 @@ impl RdpFile {
         }
     }
 
+    /// Control characters are dropped: a CR or LF in a value (a user name, say) would
+    /// otherwise add lines of its own to an exported file.
     pub fn set_str(&mut self, key: &str, value: impl Into<String>) {
-        self.set(key, RdpValue::Str(value.into()));
+        let mut v: String = value.into();
+        v.retain(|c| !c.is_control() || c == '\t');
+        self.set(key, RdpValue::Str(v));
     }
 
     pub fn set_int(&mut self, key: &str, value: i64) {
@@ -287,6 +291,42 @@ pub fn split_host_port(s: &str) -> Option<(String, Option<u16>)> {
     }
 }
 
+/// Whether `host` is a computer name or an IP address, and nothing else.
+///
+/// FreeRDP gives some host strings special meanings: one starting with `/` is a Unix
+/// socket path, one starting with `|` makes the port number an already-open file
+/// descriptor (which would be one of Transom's own), and `vsock://…` is a VM socket.
+/// Host names come from files and links, so accept only DNS or NetBIOS names (ASCII
+/// or Unicode letters and digits, `-`, `_` and dots between labels) and IP literals
+/// (IPv6 optionally in brackets, with a zone).
+pub fn valid_host(host: &str) -> bool {
+    let h = host
+        .strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(host);
+    if h.is_empty() || h.len() > 253 {
+        return false;
+    }
+    if h.contains(':') {
+        let (addr, zone) = match h.split_once('%') {
+            Some((a, z)) => (a, Some(z)),
+            None => (h, None),
+        };
+        return addr.parse::<std::net::Ipv6Addr>().is_ok()
+            && zone.is_none_or(|z| {
+                !z.is_empty()
+                    && z.chars()
+                        .all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c))
+            });
+    }
+    // An IPv4 literal is also a valid name by these rules.
+    h.split('.').all(|label| {
+        let mut chars = label.chars();
+        chars.next().is_some_and(char::is_alphanumeric)
+            && chars.all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+    }) || h.ends_with('.') && !h.ends_with("..") && valid_host(&h[..h.len() - 1])
+}
+
 /// Inverse of [`split_host_port`]; IPv6 literals get brackets, port 3389 is implied.
 pub fn join_host_port(host: &str, port: Option<u16>) -> String {
     let h = if host.contains(':') {
@@ -364,6 +404,43 @@ mod tests {
         gatewayhostname:s:\r\nprompt for credentials:i:0\r\nauthentication level:i:2\r\n\
         desktopscalefactor:i:200\r\nsmart sizing:i:1\r\ndynamic resolution:i:1\r\n\
         password 51:b:01000000D08C9DDF0115D1118C7A00C04FC297EB\r\nweird line\r\n";
+
+    #[test]
+    fn valid_hosts() {
+        for h in [
+            "pc",
+            "pc.corp.example",
+            "pc.corp.example.",
+            "10.0.0.1",
+            "fe80::1",
+            "[fe80::1]",
+            "fe80::1%eth0",
+            "my_host-2",
+            "bücher.example",
+            "WIN-SRV01",
+        ] {
+            assert!(valid_host(h), "{h}");
+        }
+        for h in [
+            "",
+            "|5",
+            "/run/user/1000/bus",
+            "vsock://2",
+            "pc corp",
+            ".pc",
+            "pc..corp",
+            "-pc",
+            "pc\u{202e}moc",
+            "pc\u{200b}",
+            "fe80::1%",
+            "[fe80::1",
+            "a:b",
+            "pc/x",
+            &"a".repeat(254),
+        ] {
+            assert!(!valid_host(h), "{h:?}");
+        }
+    }
 
     #[test]
     fn parses_mstsc_utf16() {

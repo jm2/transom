@@ -34,7 +34,7 @@ demo() { # NAME extra-env… -- demo args… ; log in $STATE/hwdec-NAME.log
         -e TRANSOM_CHECK_DEBUG -e SCALE="${SCALE:-1}" -e MONITOR="${MONITOR:-1600x1000}" -e RUST_LOG=transom_view=info,transom_view_freerdp=info "${env[@]}" \
         -v "$PWD/target/debug:/demo:ro,Z" -v "$PWD/tests/servers/view-check/inner.sh:/inner.sh:ro,Z" \
         -v "$STATE:/state:Z" --entrypoint /inner.sh transom-test-hwdec \
-        localhost:13390 rdp --password-file /state/target.pw --trust "$xfp" --size 1280x800 "$@" \
+        localhost:13390 rdp --password-file /state/target.pw --trust "$xfp" --security tls --size 1280x800 "$@" \
         > "$STATE/hwdec-$name.log" 2>&1 &
     local pid=$!
     sleep 6; motion; wait "$pid" || true
