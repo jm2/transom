@@ -286,10 +286,25 @@ impl ClipboardBridge {
         probe.map(|p| p()).unwrap_or_default()
     }
 
-    /// GDK reported a change (or we made one): note the platform's change count.
-    fn sync_platform(&self) {
+    /// GDK reported a change: note the platform's change count. Returns it.
+    fn sync_platform(&self) -> Option<i64> {
         let count = self.platform().change_count;
         self.0.borrow_mut().platform_count = count;
+        count
+    }
+
+    /// After a copy made in this process: accept the change count GDK's own write
+    /// produced, one more than `before`, and no other. GDK on macOS (4.24) reports
+    /// such a copy before writing it to the pasteboard, then writes it with one
+    /// `clearContents` (one change). Reads of a copy made in this process come from
+    /// GDK's own provider, not the pasteboard. Any other count means another
+    /// application wrote as well: it stays unseen, so the next request is refused
+    /// and the clipboard announced again.
+    fn accept_own_write(&self, before: Option<i64>) {
+        let expected = before.and_then(|c| c.checked_add(1));
+        if expected.is_some() && self.platform().change_count == expected {
+            self.0.borrow_mut().platform_count = expected;
+        }
     }
 
     /// The platform clipboard changed without GDK reporting it (macOS).
@@ -335,12 +350,12 @@ impl ClipboardBridge {
     }
 
     fn local_changed(&self, view: &TransomView, cb: &gdk::Clipboard) {
-        self.sync_platform();
-        if cb.is_local() && self.0.borrow().probe.is_some() {
-            // GDK may write a copy made in this process to the system clipboard only
-            // after reporting it: note the change count again once it has.
+        let before = self.sync_platform();
+        if cb.is_local() && before.is_some() {
+            // GDK writes a copy made in this process to the system clipboard right
+            // after reporting it: accept the count that write produces once it has.
             let bridge = self.clone();
-            glib::idle_add_local_once(move || bridge.sync_platform());
+            glib::idle_add_local_once(move || bridge.accept_own_write(before));
         }
         // Our own publication of remote content: the remote has it already, and it
         // isn't offered back (nor read back: GDK would decode a remote image).
@@ -657,10 +672,10 @@ impl ClipboardBridge {
         }
         let union = gdk::ContentProvider::new_union(&providers);
         self.0.borrow_mut().ours = Some(union.clone());
+        // (Its change count is accepted by `local_changed`, which this triggers.)
         if let Err(e) = cb.set_content(Some(&union)) {
             tracing::warn!("setting local clipboard: {e}");
         }
-        self.sync_platform();
     }
 }
 
@@ -934,6 +949,139 @@ fn read_range(f: &LocalFile, offset: u64, len: u32) -> Option<Vec<u8>> {
 /// Expand the paths on the local clipboard into the files to offer: directories are
 /// walked; symbolic links and special files (FIFOs, devices, sockets) are skipped,
 /// so only what is really in the copied folders is offered.
+///
+/// On Unix the walk goes through directory handles: each folder is opened without
+/// following a link, checked to be the one just looked at, and listed and descended
+/// from that handle, so a folder swapped for a link meanwhile isn't followed.
+#[cfg(unix)]
+fn walk_roots(roots: &[PathBuf]) -> Vec<LocalFile> {
+    use rustix::fs::{Mode, OFlags};
+    use std::os::fd::AsFd;
+    let mut walk = Walk::default();
+    for r in roots {
+        let (Some(name), Some(parent)) = (r.file_name(), r.parent()) else {
+            continue;
+        };
+        let parent = if parent.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            parent
+        };
+        let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC;
+        if let Ok(dir) = rustix::fs::open(parent, flags, Mode::empty()) {
+            let rel = name.to_string_lossy().into_owned();
+            walk.entry(dir.as_fd(), name, r.clone(), rel);
+        }
+    }
+    if walk.skipped > 0 {
+        tracing::debug!(
+            skipped = walk.skipped,
+            "not offering symbolic links or special files"
+        );
+    }
+    walk.out
+}
+
+#[cfg(unix)]
+#[derive(Default)]
+struct Walk {
+    out: Vec<LocalFile>,
+    skipped: usize,
+}
+
+#[cfg(unix)]
+impl Walk {
+    /// `name` in the directory open at `dir` (at `path`, offered as `rel`): a regular
+    /// file is listed, a directory listed and walked, anything else skipped.
+    fn entry(
+        &mut self,
+        dir: std::os::fd::BorrowedFd<'_>,
+        name: &std::ffi::OsStr,
+        path: PathBuf,
+        rel: String,
+    ) {
+        use rustix::fs::{AtFlags, FileType};
+        if self.out.len() >= clipboard::MAX_FILES {
+            return;
+        }
+        let Ok(st) = rustix::fs::statat(dir, name, AtFlags::SYMLINK_NOFOLLOW) else {
+            return;
+        };
+        let id = stat_id(&st);
+        match FileType::from_raw_mode(st.st_mode) {
+            FileType::RegularFile => self.out.push(LocalFile {
+                path,
+                desc: FileDescriptor {
+                    path: rel,
+                    size: u64::try_from(st.st_size).unwrap_or(0),
+                    is_dir: false,
+                },
+                id,
+            }),
+            FileType::Directory => {
+                let Some(fd) = open_dir(dir, name, id) else {
+                    self.skipped += 1; // swapped for something else since
+                    return;
+                };
+                self.out.push(LocalFile {
+                    path: path.clone(),
+                    desc: FileDescriptor {
+                        path: rel.clone(),
+                        size: 0,
+                        is_dir: true,
+                    },
+                    id,
+                });
+                self.dir(&fd, &path, &rel);
+            }
+            _ => self.skipped += 1,
+        }
+    }
+
+    /// Walk the entries of the directory open at `fd` (at `path`, offered as `rel`).
+    fn dir(&mut self, fd: &std::os::fd::OwnedFd, path: &Path, rel: &str) {
+        use std::os::fd::AsFd;
+        use std::os::unix::ffi::OsStrExt;
+        let Ok(entries) = rustix::fs::Dir::read_from(fd) else {
+            return;
+        };
+        let mut names: Vec<std::ffi::OsString> = entries
+            .flatten()
+            .map(|e| std::ffi::OsStr::from_bytes(e.file_name().to_bytes()).to_owned())
+            .filter(|n| n != "." && n != "..")
+            .collect();
+        names.sort();
+        for n in names {
+            let rel = format!("{rel}/{}", n.to_string_lossy());
+            self.entry(fd.as_fd(), &n, path.join(&n), rel);
+        }
+    }
+}
+
+/// Open the directory `name` in `dir` without following a link, if it's still the
+/// directory `id` that was looked at.
+#[cfg(unix)]
+fn open_dir(
+    dir: std::os::fd::BorrowedFd<'_>,
+    name: &std::ffi::OsStr,
+    id: (u64, u64),
+) -> Option<std::os::fd::OwnedFd> {
+    use rustix::fs::{Mode, OFlags};
+    let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    let fd = rustix::fs::openat(dir, name, flags, Mode::empty()).ok()?;
+    (stat_id(&rustix::fs::fstat(&fd).ok()?) == id).then_some(fd)
+}
+
+/// Device and inode, as std's `MetadataExt` gives them (what `open_offered` compares).
+#[cfg(unix)]
+#[allow(clippy::unnecessary_cast)] // dev_t and ino_t differ between platforms
+fn stat_id(st: &rustix::fs::Stat) -> (u64, u64) {
+    (st.st_dev as u64, st.st_ino as u64)
+}
+
+/// [`walk_roots`] elsewhere (Windows), by path: links and junctions are skipped, but
+/// a folder swapped for one between its check and its listing is followed.
+#[cfg(not(unix))]
 fn walk_roots(roots: &[PathBuf]) -> Vec<LocalFile> {
     fn walk(path: &Path, rel: String, out: &mut Vec<LocalFile>, skipped: &mut usize) {
         if out.len() >= clipboard::MAX_FILES {
@@ -954,11 +1102,6 @@ fn walk_roots(roots: &[PathBuf]) -> Vec<LocalFile> {
                 path: rel.clone(),
                 size: if is_dir { 0 } else { meta.len() },
                 is_dir,
-            },
-            #[cfg(unix)]
-            id: {
-                use std::os::unix::fs::MetadataExt;
-                (meta.dev(), meta.ino())
             },
         });
         if is_dir && let Ok(entries) = std::fs::read_dir(path) {
@@ -1369,6 +1512,58 @@ mod tests {
         if fifo {
             assert!(dir.join("fifo").exists());
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_walk_doesnt_follow_a_folder_swapped_for_a_link() {
+        use std::os::fd::AsFd;
+        use std::os::unix::fs::{MetadataExt, symlink};
+        let t = Scratch::new("dirswap");
+        let outside = t.0.join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("secret.txt"), "not offered").unwrap();
+        let copied = t.0.join("copied");
+        std::fs::create_dir_all(copied.join("sub")).unwrap();
+        std::fs::write(copied.join("sub").join("a.txt"), "offered").unwrap();
+        let a_id = {
+            let m = std::fs::metadata(copied.join("sub").join("a.txt")).unwrap();
+            (m.dev(), m.ino())
+        };
+        let flags = rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::DIRECTORY;
+        let parent = rustix::fs::open(&copied, flags, rustix::fs::Mode::empty()).unwrap();
+        let sub = std::ffi::OsStr::new("sub");
+        let st =
+            rustix::fs::statat(parent.as_fd(), sub, rustix::fs::AtFlags::SYMLINK_NOFOLLOW).unwrap();
+        let id = stat_id(&st);
+        let swap = |to: &Path| {
+            std::fs::rename(copied.join("sub"), copied.join("sub-moved")).unwrap();
+            symlink(to, copied.join("sub")).unwrap();
+        };
+        let unswap = || {
+            std::fs::remove_file(copied.join("sub")).unwrap();
+            std::fs::rename(copied.join("sub-moved"), copied.join("sub")).unwrap();
+        };
+
+        // Swapped for a link after it was looked at, before it's opened: refused, even
+        // when the link leads back to the very same folder.
+        swap(&copied.join("sub-moved"));
+        assert!(open_dir(parent.as_fd(), sub, id).is_none());
+        unswap();
+
+        // Swapped after it was opened: the walk goes on from the handle, in the
+        // folder that was copied, not where the link leads.
+        let fd = open_dir(parent.as_fd(), sub, id).expect("the folder as it was");
+        swap(&outside);
+        let mut walk = Walk::default();
+        walk.dir(&fd, &copied.join("sub"), "copied/sub");
+        let found: Vec<(&str, (u64, u64))> = walk
+            .out
+            .iter()
+            .map(|f| (f.desc.path.as_str(), f.id))
+            .collect();
+        assert_eq!(found, [("copied/sub/a.txt", a_id)]);
+        unswap();
     }
 
     #[cfg(unix)]

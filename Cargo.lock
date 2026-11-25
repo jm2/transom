@@ -1530,6 +1530,7 @@ dependencies = [
  "async-channel",
  "gtk4",
  "libc",
+ "rustix",
  "sha2",
  "tracing",
  "tracing-subscriber",

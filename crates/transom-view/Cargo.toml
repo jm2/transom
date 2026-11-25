@@ -19,6 +19,9 @@ transom-view-core.workspace = true
 # libc: the O_NOFOLLOW / O_NONBLOCK flags for opening local files the remote reads
 # (constants only; already in the tree through glib).
 libc = "0.2"
+# rustix: walk copied folders through directory handles (openat, fstatat, getdents)
+# without unsafe code, so a folder swapped for a link isn't followed.
+rustix = { version = "1.1", default-features = false, features = ["fs", "std"] }
 
 [dev-dependencies]
 # sha2: the demo's file-clipboard test compares file hashes.
