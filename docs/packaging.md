@@ -2,7 +2,7 @@
 
 | Platform | Package | Built by | Notes |
 |---|---|---|---|
-| Linux x86_64, aarch64 | Flatpak (GNOME 51) | `build-aux/flatpak/io.github.jm2.Transom.yml` (`scripts/build-linux.sh --flatpak`) | Builds its own FreeRDP (with RDPEAR); H.264 from codecs-extra |
+| Linux x86_64, aarch64 | Flatpak (GNOME 51) | `build-aux/flatpak/io.github.jm2.Transom.yml` (`scripts/build-linux.sh --flatpak`) | Builds its own FreeRDP (with RDPEAR); H.264 from codecs-extra. Smart-card (`pcsc`), printer (`cups`) and USB access are not granted by default (`flatpak override`; Transom names the command) |
 | Linux x86_64, aarch64 with glibc 2.39+ (Ubuntu 24.04+, Debian 13+, Fedora 42+, Arch, openSUSE Tumbleweed) | AppImage | `build-aux/appimage/build-appimage.sh` (`scripts/build-linux.sh --appimage`, on Debian 13) | Bundles Debian 13's GTK, FreeRDP and FFmpeg, leaving the host libraries on `build-aux/appimage/excludelist` (glibc, the graphics stack, …) to the system; the pinned AppImage type2 runtime |
 | Fedora 44+ | RPM | `build-aux/rpm/transom.spec` (offline, `scripts/dist.sh` tarballs); Packit → COPR (`.packit.yaml`) | Release workflow also builds an RPM with `cargo generate-rpm` (`scripts/build-linux.sh --rpm`) |
 | Debian 13+, Ubuntu 25.10+ | .deb | `cargo deb -p transom` (`scripts/build-linux.sh --deb`) | Needs FreeRDP ≥ 3.15: Debian 12, Ubuntu 24.04 and 25.04 are too old |
@@ -28,7 +28,10 @@ assets and the tag's changelog section.
    `pkgver` in both `build-aux/arch/PKGBUILD*`, `upstream_version` and `Version` in
    `build-aux/rpm/transom.spec` (a prerelease `0.2.0-rc.1` is `Version: 0.2.0~rc.1`), a
    `## [X.Y.Z] — date` section and its link in `CHANGELOG.md`, and a `<release>` in the
-   metainfo. `python3 scripts/release_check.py --tag vX.Y.Z` must pass. Merge it.
+   metainfo. `python3 scripts/release_check.py --tag vX.Y.Z` must pass. Record the
+   bundled libraries' versions too (`scripts/bundled-versions.py --write`, which needs
+   podman or docker for Debian's): the weekly Bundled libraries workflow compares
+   against them. Merge it.
 2. Tag the merge commit on `main` with an annotated tag and push it:
    `git tag -a vX.Y.Z -m "Transom vX.Y.Z" && git push origin vX.Y.Z`.
 3. Run the workflow: `gh workflow run release.yml -f tag=vX.Y.Z`.

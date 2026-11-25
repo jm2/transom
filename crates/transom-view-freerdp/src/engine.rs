@@ -448,8 +448,8 @@ unsafe fn event_loop(
                 Ok(EngineCommand::LayoutMonitors(_)) => {}
                 // SAFETY: input belongs to the live context.
                 Ok(EngineCommand::Input(ev)) => unsafe { send_input((*ctx).input, ev) },
-                // SAFETY: as above.
                 Ok(EngineCommand::VideoUnsupported) => state.video.request_disable(),
+                // SAFETY: as for Input.
                 Ok(EngineCommand::CtrlAltDel) => unsafe { send_ctrl_alt_del((*ctx).input) },
                 Ok(EngineCommand::ClipboardLocalFormats(f)) => {
                     if state.config.clipboard.to_remote() {
@@ -536,6 +536,11 @@ unsafe fn rcg_refused(ctx: *mut ffi::rdpContext, state: &State) -> bool {
         .contains(&name.as_str())
 }
 
+/// Why the connection attempt failed, for the UI.
+///
+/// # Safety
+/// `ctx` must be a valid context, owned by this thread, whose connection attempt
+/// has just failed.
 unsafe fn classify_error(ctx: *mut ffi::rdpContext, state: &State) -> DisconnectReason {
     if state.aborted() {
         return DisconnectReason::Local;

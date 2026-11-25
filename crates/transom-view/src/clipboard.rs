@@ -208,6 +208,10 @@ impl ClipboardBridge {
 
     /// Whether the local clipboard still holds what we last announced (and isn't a
     /// password manager's secret): only then may the remote read it.
+    /// Whether a remote request for the local clipboard may be answered: only for the
+    /// content that was announced (which happens only while the session has focus),
+    /// and never for a concealed entry. Focus isn't required here: a follower view
+    /// (multi-monitor) may be the one the user pastes in.
     fn may_serve(&self, cb: &gdk::Clipboard) -> bool {
         let s = self.0.borrow();
         s.local_gen == s.announced_gen && !concealed(cb)
@@ -215,9 +219,9 @@ impl ClipboardBridge {
 
     /// The remote asks for our clipboard in `format`.
     pub fn data_requested(&self, view: &TransomView, format: ClipFormat) {
-        let (mode, cb) = {
+        let (mode, cb, generation) = {
             let s = self.0.borrow();
-            (s.mode, s.clipboard.clone())
+            (s.mode, s.clipboard.clone(), s.local_gen)
         };
         let (Some(mode), Some(cb)) = (mode, cb) else {
             view.send_command(EngineCommand::ClipboardReply { format, data: None });
@@ -228,10 +232,13 @@ impl ClipboardBridge {
             return;
         }
         let view = view.clone();
+        let bridge = self.clone();
         if format == ClipFormat::Files {
-            let bridge = self.clone();
             glib::spawn_future_local(async move {
-                let files = read_local_files(&cb).await.unwrap_or_default();
+                let mut files = read_local_files(&cb).await.unwrap_or_default();
+                if !bridge.unchanged_since(&cb, generation) {
+                    files.clear();
+                }
                 let descriptors: Vec<FileDescriptor> =
                     files.iter().map(|(_, d)| d.clone()).collect();
                 tracing::debug!(count = descriptors.len(), "offering local files");
@@ -243,12 +250,27 @@ impl ClipboardBridge {
             return;
         }
         glib::spawn_future_local(async move {
-            let data = read_local(&cb, format).await;
+            let mut data = read_local(&cb, format).await;
             if data.is_none() {
                 tracing::debug!(?format, "could not read local clipboard");
+            } else if !bridge.unchanged_since(&cb, generation) {
+                data = None;
             }
             view.send_command(EngineCommand::ClipboardReply { format, data });
         });
+    }
+
+    /// Still fine to send what a read started at `generation` returned: the local
+    /// clipboard hasn't changed and isn't concealed. Reads are asynchronous: what they
+    /// return may already be a newer copy (a password the user copied meanwhile),
+    /// which must not reach the remote. (On Windows GDK reads on another thread, and
+    /// a change made during the read can go unseen here: #21.)
+    fn unchanged_since(&self, cb: &gdk::Clipboard, generation: u64) -> bool {
+        let unchanged = self.0.borrow().local_gen == generation && !concealed(cb);
+        if !unchanged {
+            tracing::debug!("local clipboard changed during the read; not sending it");
+        }
+        unchanged
     }
 
     /// The remote clipboard changed.

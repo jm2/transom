@@ -17,10 +17,11 @@ GTK app runs on macOS and Windows.
 
 ![A Windows 11 session in Transom](data/screenshots/transom-session.png)
 
-> **Pre-release.** Transom works day to day against Windows and gnome-remote-desktop, and
-> every feature below marked ✅ is covered by an automated check against real servers. The
-> first release, v0.1.0, is being prepared; until then, build from source. The plan and
-> progress log are in [PLAN.md](PLAN.md).
+> **First release.** Transom works day to day against Windows and gnome-remote-desktop, and
+> every feature below marked ✅ is covered by an automated check against real servers.
+> v0.1.0 is the first release ([Installation](#installation)); read
+> [Security](#security) for what it does and doesn't yet protect. The plan and progress log
+> are in [PLAN.md](PLAN.md).
 
 ## Features
 
@@ -31,7 +32,7 @@ GTK app runs on macOS and Windows.
 | Servers: Windows 10/11, Windows Server, gnome-remote-desktop (including remote login) | ✅ xrdp: smoke test only |
 | Saved connections, quick connect, search | ✅ |
 | `.rdp` files (import, export, open) and `rdp://` links | ✅ Both link formats; Linux desktop file, macOS, Windows installer |
-| Certificate trust: system CAs, then trust on first use; a changed certificate blocks the connection | ✅ |
+| Certificate trust: system CAs, then trust on first use; a changed certificate is refused unless you explicitly accept it after a warning | ✅ |
 | Passwords remembered in the system keyring | ✅ Secret Service (Linux), Keychain (macOS), Credential Manager (Windows) |
 | Tabs (detachable), fullscreen, multiple monitors | ✅ |
 | Keyboard with system shortcuts sent to the remote; Ctrl+Alt+End for Ctrl+Alt+Del | ✅ |
@@ -46,11 +47,33 @@ GTK app runs on macOS and Windows.
 | Screen reader labels and keyboard navigation | ✅ AT-SPI audit |
 | RemoteApp windows, camera redirection, MTP/PTP devices | 🚧 Planned |
 | Translations | 🚧 Planned |
-| Packages: Flatpak, .deb, .rpm, Arch, macOS .dmg, Windows installer and .zip | ✅ Built by the release workflow, for x86_64 and arm64 where the platform has it |
+| Packages: Flatpak, AppImage, .deb, .rpm, Arch, macOS .dmg, Windows installer and .zip | ✅ Built by the release workflow, for x86_64 and arm64 where the platform has it |
+| The RDP engine (FreeRDP, FFmpeg) in a separate, sandboxed helper process | 🚧 Planned, not yet implemented: today it runs inside Transom's process, and only the Flatpak sandbox contains it ([#18](https://github.com/jm2/transom/issues/18)) |
+| A second, memory-safe engine ([IronRDP](https://github.com/Devolutions/IronRDP), in Rust), first for connections opened from `.rdp` files and `rdp://` links | 🚧 Planned, not yet implemented ([#20](https://github.com/jm2/transom/issues/20)) |
 | Linux, macOS, Windows | ✅ Linux daily; macOS (Apple silicon) and Windows 11 tested |
 | Light and dark style | ✅ Automatic (libadwaita) |
 
 Known limitations are listed in [docs/known-issues.md](docs/known-issues.md).
+
+## Security
+
+- **Defaults:** `.rdp` files and `rdp://` links ask before connecting and can't grant
+  devices; certificates are checked against the system CAs, then trusted on first use,
+  and a changed certificate is refused unless you explicitly accept it after a warning;
+  devices, the clipboard for files and
+  links, and Remember Password are off until you turn them on.
+- **The main limitation:** FreeRDP and FFmpeg parse everything a server sends, and they
+  run inside Transom's process. A bug a hostile server exploits there runs as you, except
+  in the **Flatpak**, whose sandbox contains it. For servers you don't trust, use the
+  Flatpak. Moving the engine into a sandboxed helper process is planned, not yet
+  implemented ([#18](https://github.com/jm2/transom/issues/18)), and so is a second,
+  memory-safe engine (IronRDP), first for connections from files and links
+  ([#20](https://github.com/jm2/transom/issues/20)).
+- **Bundled libraries:** the AppImage, macOS and Windows packages carry their own FreeRDP,
+  FFmpeg and OpenSSL, and are rebuilt and released when those publish security fixes.
+
+[docs/security.md](docs/security.md) has the details; report problems as
+[SECURITY.md](SECURITY.md) describes.
 
 ---
 
@@ -163,8 +186,15 @@ flatpak install --user dist/transom-linux-x86_64.flatpak
 ```
 
 The Flatpak builds its own FreeRDP (with Remote Credential Guard, smart cards, printers
-and USB). USB redirection additionally needs
-`flatpak override --user --device=all io.github.jm2.Transom`.
+and USB). Smart cards, printers and USB need a permission, granted once; restart Transom
+after granting it. For smart cards and printers, Transom names the command when a
+connection shares them; USB has its own setup ([docs/usb.md](docs/usb.md)):
+
+```sh
+flatpak override --user --socket=pcsc io.github.jm2.Transom   # smart cards
+flatpak override --user --socket=cups io.github.jm2.Transom   # printers
+flatpak override --user --device=all io.github.jm2.Transom    # USB (docs/usb.md)
+```
 
 ### AppImage
 

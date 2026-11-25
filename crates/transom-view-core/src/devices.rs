@@ -83,6 +83,26 @@ pub enum RedirectionProblem {
     /// A USB device the selector matches can't be redirected (no access, or an input
     /// device or hub); the selector is dropped for the session.
     Usb(String, UsbRefusal),
+    /// In a Flatpak sandbox without the socket the device needs (`pcsc` for smart
+    /// cards, `cups` for printers): granted only when the user asks for it.
+    SandboxSocket {
+        what: &'static str,
+        socket: &'static str,
+    },
+}
+
+impl RedirectionProblem {
+    /// The command that fixes the problem, when there is one: granting the Flatpak
+    /// the socket a device needs (takes effect when the app restarts).
+    pub fn fix_command(&self) -> Option<String> {
+        match self {
+            Self::SandboxSocket { socket, .. } => {
+                let app = std::env::var("FLATPAK_ID").unwrap_or_else(|_| "APP-ID".into());
+                Some(format!("flatpak override --user --socket={socket} {app}"))
+            }
+            _ => None,
+        }
+    }
 }
 
 impl std::fmt::Display for RedirectionProblem {
@@ -92,6 +112,9 @@ impl std::fmt::Display for RedirectionProblem {
             Self::MissingPort(p) => write!(f, "serial port {} doesn't exist", p.display()),
             Self::BadPortName(n) => write!(f, "\"{n}\" isn't a COM port name (COM1–COM256)"),
             Self::Usb(dev, why) => write!(f, "USB device {dev}: {why}"),
+            Self::SandboxSocket { what, socket } => {
+                write!(f, "{what} (the Flatpak needs the {socket} permission)")
+            }
         }
     }
 }
@@ -103,7 +126,54 @@ pub fn usable(r: &Redirections) -> (Redirections, Vec<RedirectionProblem>) {
     } else {
         usb_devices()
     };
-    usable_with(r, &devices)
+    let (mut ok, mut problems) = usable_with(r, &devices);
+    sandbox_check(&mut ok, flatpak_sockets().as_deref(), &mut problems);
+    (ok, problems)
+}
+
+/// The sockets this Flatpak sandbox was granted (`[Context] sockets=` in
+/// `/.flatpak-info`, which includes the user's overrides), or `None` outside one.
+pub fn flatpak_sockets() -> Option<Vec<String>> {
+    std::env::var_os("FLATPAK_ID")?;
+    let info = std::fs::read_to_string("/.flatpak-info").ok()?;
+    Some(parse_flatpak_sockets(&info))
+}
+
+fn parse_flatpak_sockets(info: &str) -> Vec<String> {
+    let mut in_context = false;
+    for line in info.lines().map(str::trim) {
+        if line.starts_with('[') {
+            in_context = line == "[Context]";
+        } else if in_context && let Some(list) = line.strip_prefix("sockets=") {
+            return list
+                .split(';')
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect();
+        }
+    }
+    Vec::new()
+}
+
+/// Smart cards and printers reach the host's pcscd and CUPS through sockets a Flatpak
+/// gets only when the user grants them; without one, the device is dropped and the
+/// problem says how to grant it. `sockets`: `None` outside a sandbox.
+fn sandbox_check(
+    r: &mut Redirections,
+    sockets: Option<&[String]>,
+    problems: &mut Vec<RedirectionProblem>,
+) {
+    let Some(sockets) = sockets else { return };
+    let granted = |socket: &str| sockets.iter().any(|s| s == socket);
+    for (wanted, what, socket) in [
+        (&mut r.smartcards, "smart cards", "pcsc"),
+        (&mut r.printers, "printers", "cups"),
+    ] {
+        if *wanted && !granted(socket) {
+            *wanted = false;
+            problems.push(RedirectionProblem::SandboxSocket { what, socket });
+        }
+    }
 }
 
 /// [`usable`] against a given list of attached USB devices.
@@ -354,6 +424,49 @@ mod sysfs {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn flatpak_sockets_come_from_the_context_section() {
+        let info = "[Application]\nname=io.github.jm2.Transom\n\n[Context]\n\
+                    shared=network;ipc;\nsockets=wayland;!x11;fallback-x11;pcsc;\n\n\
+                    [Instance]\nsockets=cups;\n";
+        assert_eq!(
+            parse_flatpak_sockets(info),
+            ["wayland", "!x11", "fallback-x11", "pcsc"]
+        );
+        assert!(parse_flatpak_sockets("[Application]\nname=x\n").is_empty());
+    }
+
+    #[test]
+    fn a_sandbox_without_the_socket_drops_the_device() {
+        let want = Redirections {
+            smartcards: true,
+            printers: true,
+            ..Default::default()
+        };
+        // Outside a sandbox: untouched.
+        let mut r = want.clone();
+        let mut problems = Vec::new();
+        sandbox_check(&mut r, None, &mut problems);
+        assert_eq!((r, problems.len()), (want.clone(), 0));
+        // In one with pcsc only: printers dropped, with the command that grants cups.
+        let mut r = want.clone();
+        sandbox_check(&mut r, Some(&["pcsc".to_string()]), &mut problems);
+        assert!(r.smartcards && !r.printers);
+        assert_eq!(
+            problems,
+            [RedirectionProblem::SandboxSocket {
+                what: "printers",
+                socket: "cups"
+            }]
+        );
+        assert!(problems[0].fix_command().unwrap().contains("--socket=cups"));
+        // A device that isn't wanted needs no socket.
+        let mut r = Redirections::default();
+        let mut problems = Vec::new();
+        sandbox_check(&mut r, Some(&[]), &mut problems);
+        assert!(problems.is_empty());
+    }
 
     #[test]
     fn drive_names_fit_dos_names() {

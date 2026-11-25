@@ -273,7 +273,7 @@ for, and test refusals as well as success.
 - [x] Accessibility (screen-reader labels on all chrome, high-contrast): AT-SPI audit
       (`scripts/a11y-check.sh`); Ctrl+Alt+Home moves focus out of the session. High contrast
       comes from libadwaita (no custom colours).
-- [ ] Optional IronRDP backend behind a feature flag.
+- [ ] Optional IronRDP backend behind a feature flag ([#20](https://github.com/jm2/transom/issues/20): first for connections from files and links).
 
 ## 8. Test matrix
 

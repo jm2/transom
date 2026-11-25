@@ -1,0 +1,72 @@
+# The AppImage, macOS and Windows packages bundle FreeRDP, FFmpeg, OpenSSL and the
+# libraries that parse what a server sends, and the Flatpak pins FreeRDP's source:
+# none of them gets a distribution's security updates (SECURITY.md). Weekly, compare
+# what their sources offer with build-aux/packaging/bundled-versions.txt (recorded at
+# the last release) and keep one issue open listing what moved, so the packages get
+# rebuilt and released. scripts/bundled-versions.py --write records the new versions
+# once they ship.
+name: Bundled libraries
+
+on:
+  schedule:
+    - cron: "23 6 * * 1"   # Mondays
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Check for updates
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Compare with the last release, and open or update the issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+          title="Bundled libraries changed: rebuild the AppImage, macOS and Windows packages"
+          # The step's shell runs with -e: take the status in an OR-list.
+          status=0
+          python3 scripts/bundled-versions.py --check > report.md || status=$?
+          cat report.md
+          # 0: no changes; 3: changes; anything else (2: a source couldn't be
+          # queried, 1: the script failed) fails the job and leaves the issue alone.
+          number=$(gh issue list --repo "$REPOSITORY" --state open --search "in:title \"$title\"" \
+                     --json number,title --jq "map(select(.title == \"$title\")) | .[0].number // empty")
+          case $status in
+            0)
+              # Nothing moved since the recorded versions: a report from before the
+              # last release is done with.
+              if [ -n "$number" ]; then
+                gh issue close "$number" --repo "$REPOSITORY" \
+                  --comment "No changes remain since the versions recorded at the last release (run ${GITHUB_RUN_ID})."
+              fi
+              exit 0 ;;
+            3) ;;
+            *) echo "bundled-versions.py exited $status; no issue updated" >&2; exit 1 ;;
+          esac
+          {
+            echo "Libraries in Transom's self-contained packages changed since the last release."
+            echo "When a change fixes a security problem (check the package's changelog or advisory),"
+            echo "rebuild and release (docs/packaging.md), then record the new versions with"
+            echo '`scripts/bundled-versions.py --write`. The Flatpak rows name the source pins to'
+            echo "update in build-aux/flatpak/io.github.jm2.Transom.yml."
+            echo
+            cat report.md
+            echo
+            echo "_Updated by the Bundled libraries workflow, run ${GITHUB_RUN_ID}._"
+          } > body.md
+          if [ -n "$number" ]; then
+            gh issue edit "$number" --repo "$REPOSITORY" --body-file body.md
+          else
+            gh issue create --repo "$REPOSITORY" --title "$title" --label dependencies --body-file body.md
+          fi

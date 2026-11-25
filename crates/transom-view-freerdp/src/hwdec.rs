@@ -231,6 +231,7 @@ pub(crate) struct HwFrame(*mut av::AVFrame);
 // SAFETY: the frame is immutable after decoding; FFmpeg frame references are
 // refcounted atomically and may be released from any thread.
 unsafe impl Send for HwFrame {}
+// SAFETY: as for Send: shared references only read the immutable frame.
 unsafe impl Sync for HwFrame {}
 
 impl std::fmt::Debug for HwFrame {
@@ -252,6 +253,7 @@ impl Drop for HwFrame {
 struct Mapped(*mut av::AVFrame);
 // SAFETY: as for HwFrame.
 unsafe impl Send for Mapped {}
+// SAFETY: as for HwFrame.
 unsafe impl Sync for Mapped {}
 impl Drop for Mapped {
     fn drop(&mut self) {

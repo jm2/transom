@@ -19,11 +19,13 @@ finish-args:
   - --socket=fallback-x11
   - --device=dri
   - --socket=pulseaudio    # remote audio and microphone
-  - --socket=pcsc          # smart card redirection (the host's pcscd)
-  - --socket=cups          # printer redirection (the host's CUPS)
-  # Folders for drive redirection come from the file chooser portal. USB
-  # redirection needs raw device access, which is left to the user:
-  # flatpak override --user --device=all io.github.jm2.Transom (docs/usb.md).
+  # Folders for drive redirection come from the file chooser portal. The other
+  # devices reach host services, so their access is the user's to grant (then
+  # restart Transom); for smart cards and printers, Transom names the command when
+  # a connection shares the device:
+  #   smart cards: flatpak override --user --socket=pcsc io.github.jm2.Transom
+  #   printers:    flatpak override --user --socket=cups io.github.jm2.Transom
+  #   USB:         flatpak override --user --device=all io.github.jm2.Transom (docs/usb.md)
   # Passwords: libsecret uses the Secret portal inside the sandbox; no extra access.
 build-options:
   append-path: /usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/llvm23/bin
