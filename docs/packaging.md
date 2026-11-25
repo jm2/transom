@@ -3,10 +3,10 @@
 | Platform | Package | Built by | Notes |
 |---|---|---|---|
 | Linux x86_64, aarch64 | Flatpak (GNOME 51) | `build-aux/flatpak/io.github.jm2.Transom.yml` (`scripts/build-linux.sh --flatpak`) | Builds its own FreeRDP (with RDPEAR); H.264 from codecs-extra. Smart-card (`pcsc`), printer (`cups`) and USB access are not granted by default (`flatpak override`; Transom names the command) |
-| Linux x86_64, aarch64 with glibc 2.39+ (Ubuntu 24.04+, Debian 13+, Fedora 42+, Arch, openSUSE Tumbleweed) | AppImage | `build-aux/appimage/build-appimage.sh` (`scripts/build-linux.sh --appimage`, on Debian 13) | Bundles Debian 13's GTK, FreeRDP and FFmpeg, leaving the host libraries on `build-aux/appimage/excludelist` (glibc, the graphics stack, …) to the system; the pinned AppImage type2 runtime |
-| Fedora 44+ | RPM | `build-aux/rpm/transom.spec` (offline, `scripts/dist.sh` tarballs); Packit → COPR (`.packit.yaml`) | Release workflow also builds an RPM with `cargo generate-rpm` (`scripts/build-linux.sh --rpm`) |
-| Debian 13+, Ubuntu 25.10+ | .deb | `cargo deb -p transom` (`scripts/build-linux.sh --deb`) | Needs FreeRDP ≥ 3.15: Debian 12, Ubuntu 24.04 and 25.04 are too old |
-| Arch Linux | pkg.tar.zst | `build-aux/arch/PKGBUILD` (committed HEAD, `scripts/build-linux.sh --arch-pkg`); `build-aux/arch/PKGBUILD.aur` (AUR, release tarball) | |
+| Linux x86_64, aarch64 with glibc 2.39+ (Ubuntu 24.04+, Debian 13+, Fedora 42+, Arch, openSUSE Tumbleweed) | AppImage | `build-aux/appimage/build-freerdp.sh`, then `build-aux/appimage/build-appimage.sh` (`scripts/build-linux.sh --appimage`, on Debian 13) | Builds FreeRDP from the Flatpak's pinned source (its tarball, SHA-256, patches and CMake options, read from the manifest; Debian's hardened compiler flags) and Transom against it; bundles that FreeRDP and Debian 13's GTK and FFmpeg, leaving the host libraries on `build-aux/appimage/excludelist` (glibc, the graphics stack, …) to the system; the pinned AppImage type2 runtime. Like the Flatpak's, this FreeRDP has RDPEAR and no software H.264 decoder (`-DWITH_VIDEO_FFMPEG=OFF`): H.264 is negotiated only when VA-API decoding works |
+| Fedora 44+ | RPM | `build-aux/rpm/transom.spec` (offline, `scripts/dist.sh` tarballs); Packit → COPR (`.packit.yaml`) | Requires FreeRDP ≥ 3.33.1 (`freerdp-libs >= 2:3.33.1`: Fedora's FreeRDP has epoch 2). Release workflow also builds an RPM with `cargo generate-rpm` (`scripts/build-linux.sh --rpm`) |
+| Debian 13 with trixie-backports | .deb | `cargo deb -p transom` (`scripts/build-linux.sh --deb`), against trixie-backports' FreeRDP | Requires FreeRDP ≥ 3.33.1 (`libfreerdp3-3`, `libfreerdp-client3-3`, `libwinpr3-3`): Debian 13's own 3.15 has known security problems, and every Ubuntu release so far is too old (25.10: 3.16, 26.04: 3.32.2) |
+| Arch Linux | pkg.tar.zst | `build-aux/arch/PKGBUILD` (committed HEAD, `scripts/build-linux.sh --arch-pkg`); `build-aux/arch/PKGBUILD.aur` (AUR, release tarball) | Requires `freerdp>=2:3.33.1` (Arch's FreeRDP has epoch 2) |
 | macOS 13+ (Apple silicon) | .app / .dmg | `scripts/build-macos.sh --dmg` (Homebrew) | Ad-hoc signed; not notarised yet |
 | Windows 10/11 x64, arm64 | portable .zip, Inno Setup installer | `scripts/build-windows.ps1 [-InnoSetup]` (MSYS2 CLANG64/CLANGARM64) | The installer registers `.rdp` and `rdp://` (optional task, off by default) |
 
@@ -62,7 +62,7 @@ has none listed. `scripts/verify.sh` fails while the file is stale
 | .rpm (`cargo generate-rpm`) | `/usr/share/licenses/transom/`: `COPYING`, `RUST-CRATE-LICENSES.txt` |
 | RPM spec, Arch | `/usr/share/licenses/transom/`: `COPYING`, `LICENSE-APACHE`, `RUST-CRATE-LICENSES.txt` |
 | Flatpak | `/app/share/licenses/io.github.jm2.Transom/transom/`: the same three; flatpak-builder puts FreeRDP's and pcsc-lite's beside it |
-| AppImage | `usr/share/doc/transom/` in the image (`--appimage-extract` unpacks it): `COPYING`, `THIRD-PARTY-NOTICES.txt`, `RUST-CRATE-LICENSES.txt`, `BUNDLED-PACKAGES.txt`, `licenses/` |
+| AppImage | `usr/share/doc/transom/` in the image (`--appimage-extract` unpacks it): `COPYING`, `THIRD-PARTY-NOTICES.txt`, `RUST-CRATE-LICENSES.txt`, `BUNDLED-PACKAGES.txt`, `licenses/`, `patches/` (the patches applied to FreeRDP) |
 
 `THIRD-PARTY-NOTICES.txt` covers the native libraries (GTK, FreeRDP, FFmpeg, …) that only
 the Windows, macOS and AppImage packages bundle; the other Linux packages use the system's.
@@ -72,7 +72,11 @@ formula (from the Cellar keg each file resolves into) or Debian package (from dp
 database) the bundle took files from, with its exact version, licence (or, for Debian, its
 copyright file) and source location. The licence files those packages ship go to
 `licenses/`. A bundled DLL, program, dylib or shared library that no package owns fails the
-build, since its source could not be named.
+build, since its source could not be named. The AppImage's FreeRDP is the one exception, as
+Transom builds it: its entry names the upstream release tarball and its SHA-256, the patches
+(shipped in `patches/`), the CMake options and compiler flags, and its licence and notice
+files (in `licenses/freerdp/`); the build fails if the FreeRDP libraries it bundles aren't
+that build's.
 
 ## Feature availability by platform
 
@@ -80,7 +84,7 @@ build, since its source could not be named.
 |---|---|---|---|
 | Remembered passwords | Secret Service / portal | Keychain | Credential Manager |
 | Zero-copy H.264 (ADR 0006) | VA-API + Vulkan renderer | software decode | software decode |
-| Kerberos SSO, Remote Credential Guard | FreeRDP build with RDPEAR (Flatpak) | Homebrew FreeRDP (no RDPEAR) | MSYS2 FreeRDP (no RDPEAR) |
+| Kerberos SSO, Remote Credential Guard | FreeRDP build with RDPEAR (Flatpak, AppImage) | Homebrew FreeRDP (no RDPEAR) | MSYS2 FreeRDP (no RDPEAR) |
 | USB redirection | libusb (udev permission, `docs/usb.md`) | not yet: no device list (FreeRDP could; only devices without a kernel driver) | not yet: no device list (devices would need WinUSB) |
 | Drives, printers, smart cards | yes | yes | yes |
 | `rdp://` links, `.rdp` files | desktop file (`x-scheme-handler/rdp`) | Info.plist; links via an Apple Event handler (`transom-macos`) | installer registry entries |

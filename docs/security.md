@@ -82,9 +82,10 @@ tracks the work.
 
 | Package | FreeRDP, FFmpeg, OpenSSL, … come from | Security fixes arrive |
 |---|---|---|
-| .deb, .rpm, Arch | The distribution | With the distribution's updates |
+| .deb, .rpm, Arch | The distribution; FreeRDP 3.33.1 or later is required, as older releases have known security problems a server can exploit (Debian 13: from trixie-backports) | With the distribution's updates (Debian 13: FreeRDP's through trixie-backports) |
 | Flatpak | FreeRDP and pcsc-lite built from pinned sources; FFmpeg from the runtime's codecs-extra extension, the rest from the GNOME runtime | The runtime with Flathub's updates; FreeRDP and pcsc-lite with a Transom release |
-| AppImage, macOS, Windows | Bundled from Debian 13, Homebrew and MSYS2 | With a Transom release |
+| AppImage | FreeRDP built from the Flatpak's pinned source, with its patches and options; the rest bundled from Debian 13 | With a Transom release |
+| macOS, Windows | Bundled from Homebrew and MSYS2 | With a Transom release |
 
 Transom rebuilds and releases when one of these libraries publishes a security fix
 ([SECURITY.md](../SECURITY.md)); a weekly workflow
