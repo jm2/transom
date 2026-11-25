@@ -30,12 +30,15 @@ What Transom protects, from whom, and where it falls short. Report problems as
 - Passwords go to the system keyring (Secret Service, Keychain or Credential Manager)
   only when you ask: Remember Password is off by default. They are never passed on a
   command line or in the environment.
-- The clipboard is shared only while the session has focus: copies are offered to the
-  remote, and its pastes answered, only then (files it has already started copying
-  finish, so switching windows doesn't break a long transfer). Entries a password
-  manager marks as concealed (with KDE's or macOS's clipboard markers) are neither
-  offered nor sent to the remote computer, including when one is copied while the
-  remote is reading the clipboard; entries without such a marker can't be told apart.
+- Copies are offered to the remote computer only while the session has focus: what
+  you copy in other apps meanwhile is offered when you come back to it, and a copy
+  stays available to the remote until you copy something else. Its copies reach your
+  clipboard only while the session has focus, too.
+- Entries a password manager marks as concealed (with KDE's or macOS's clipboard
+  markers, so on Linux and macOS) are neither offered nor sent to the remote computer,
+  including one copied while the remote is reading the clipboard. On Windows, password
+  managers' markers aren't recognised yet, and a copy made during such a read can slip
+  through ([#21](https://github.com/jm2/transom/issues/21)).
 
 ## Devices
 

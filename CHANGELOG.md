@@ -42,8 +42,9 @@ The first release.
   clipboard nor the microphone unless you turn them on. An imported file can't turn
   off network-level authentication, and an RD Gateway gets your password only when
   the file asks for one.
-- The clipboard is shared only while the session has focus, and entries a password
-  manager marks as concealed are neither offered nor sent to the remote computer.
+- Copies are offered to the remote computer only while the session has focus, and
+  entries a password manager marks as concealed are neither offered nor sent to it (on
+  Linux and macOS).
 - Limits on the decoding work, file transfers and images a server can ask for.
 - When Remote Credential Guard can't be used and Transom connects without it, it
   tells you which session that was.

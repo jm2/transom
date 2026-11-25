@@ -208,12 +208,13 @@ impl ClipboardBridge {
 
     /// Whether the local clipboard still holds what we last announced (and isn't a
     /// password manager's secret): only then may the remote read it.
-    /// Whether a remote request for the local clipboard may be answered: only while
-    /// the session has focus, for the content that was announced, and never for a
-    /// concealed entry.
+    /// Whether a remote request for the local clipboard may be answered: only for the
+    /// content that was announced (which happens only while the session has focus),
+    /// and never for a concealed entry. Focus isn't required here: a follower view
+    /// (multi-monitor) may be the one the user pastes in.
     fn may_serve(&self, cb: &gdk::Clipboard) -> bool {
         let s = self.0.borrow();
-        s.focused && s.local_gen == s.announced_gen && !concealed(cb)
+        s.local_gen == s.announced_gen && !concealed(cb)
     }
 
     /// The remote asks for our clipboard in `format`.
@@ -259,17 +260,17 @@ impl ClipboardBridge {
         });
     }
 
-    /// Still fine to send what a read started at `generation` returned: the session
-    /// still has focus, and the local clipboard hasn't changed and isn't concealed.
-    /// Reads are asynchronous: what they return may already be a newer copy (a
-    /// password the user copied meanwhile), which must not reach the remote.
+    /// Still fine to send what a read started at `generation` returned: the local
+    /// clipboard hasn't changed and isn't concealed. Reads are asynchronous: what they
+    /// return may already be a newer copy (a password the user copied meanwhile),
+    /// which must not reach the remote. (On Windows GDK reads on another thread, and
+    /// a change made during the read can go unseen here: #21.)
     fn unchanged_since(&self, cb: &gdk::Clipboard, generation: u64) -> bool {
-        let s = self.0.borrow();
-        let ok = s.focused && s.local_gen == generation && !concealed(cb);
-        if !ok {
-            tracing::debug!("focus lost or clipboard changed during the read; not sending it");
+        let unchanged = self.0.borrow().local_gen == generation && !concealed(cb);
+        if !unchanged {
+            tracing::debug!("local clipboard changed during the read; not sending it");
         }
-        ok
+        unchanged
     }
 
     /// The remote clipboard changed.
