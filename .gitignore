@@ -32,3 +32,4 @@ _build/
 _flatpak/
 build/
 dist/
+__pycache__/

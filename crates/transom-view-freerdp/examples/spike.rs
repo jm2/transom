@@ -8,6 +8,7 @@
 //!       [--audio] [--mic] [--stay-ms N]   (audio out / microphone in; stay N ms)
 //!       [--video-decode auto|software|verify]
 //!       [--kerberos]   (no password: use the Kerberos ticket in KRB5CCNAME)
+//!       [--security negotiate|nla|tls|rdp]   (tls for servers without NLA, e.g. xrdp)
 //! ```
 //!
 //! The password is read from `--password-file` or, if absent, the first line of stdin.
@@ -46,6 +47,7 @@ struct Args {
     video_decode: transom_view_core::video::VideoDecode,
     redirections: transom_view_core::devices::Redirections,
     stay: Option<Duration>,
+    security: SecurityMode,
 }
 
 fn parse() -> Result<Args, String> {
@@ -75,6 +77,7 @@ fn parse() -> Result<Args, String> {
         mic: false,
         kerberos: false,
         stay: None,
+        security: SecurityMode::Negotiate,
     };
     while let Some(flag) = it.next() {
         let mut val = || it.next().ok_or(format!("{flag} needs a value"));
@@ -154,6 +157,16 @@ fn parse() -> Result<Args, String> {
                     "software" => VideoDecode::Software,
                     "verify" => VideoDecode::Verify,
                     _ => return Err("--video-decode auto|software|verify".into()),
+                }
+            }
+            // A server without NLA (xrdp) gets the password only with `tls`.
+            "--security" => {
+                a.security = match val()?.as_str() {
+                    "negotiate" => SecurityMode::Negotiate,
+                    "nla" => SecurityMode::Nla,
+                    "tls" => SecurityMode::Tls,
+                    "rdp" => SecurityMode::Rdp,
+                    _ => return Err("--security negotiate|nla|tls|rdp".into()),
                 }
             }
             "--stay-ms" => {
@@ -242,7 +255,7 @@ fn main() -> ExitCode {
         username: Some(args.user.clone()),
         domain: args.domain.clone(),
         password: (!args.kerberos).then_some(password),
-        security: SecurityMode::Negotiate,
+        security: args.security,
         cert_policy: CertPolicy::Verify,
         scale_mode: ScaleMode::MatchLocal,
         fit_mode: FitMode::Fit,

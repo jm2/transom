@@ -22,6 +22,7 @@ use transom_view_core::engine::{
 };
 use transom_view_core::geometry::{ScaleFactors, Size};
 use transom_view_core::monitors::{self, RemoteMonitor};
+use transom_view_core::rdpfile::valid_host;
 use transom_view_core::trust::{self, CertInfo};
 
 use crate::ffi;
@@ -64,8 +65,17 @@ impl FreeRdpEngine {
 
 impl RdpEngine for FreeRdpEngine {
     fn connect(&self, config: SessionConfig, sink: EventSink) -> Result<EngineHandle, EngineError> {
-        if config.host.is_empty() || config.host.contains('\0') {
+        // Host names come from files and links; FreeRDP reads some as Unix socket
+        // paths or open file descriptors (`valid_host`).
+        if !valid_host(&config.host) {
             return Err(EngineError::Config("invalid host name".into()));
+        }
+        if config
+            .gateway
+            .as_ref()
+            .is_some_and(|g| !valid_host(&g.host))
+        {
+            return Err(EngineError::Config("invalid RD Gateway host name".into()));
         }
         std::fs::create_dir_all(&self.config_dir)
             .map_err(|e| EngineError::Init(format!("creating {:?}: {e}", self.config_dir)))?;
@@ -160,9 +170,12 @@ pub(crate) struct State {
     kerberos_tried: [AtomicBool; 2],
     cert_rejected: AtomicBool,
     auth_cancelled: AtomicBool,
+    /// The credentials for the remote computer this session already has (the saved
+    /// or supplied password, or what the user entered for a gateway that shares
+    /// them). Handed to FreeRDP only when it asks for them, which tells us how they
+    /// will be used: see `authenticate_ex`.
+    credentials: Mutex<Option<Credentials>>,
     pub(crate) clip: crate::cliprdr::ClipState,
-    /// Set after the first PostConnect; a later PreConnect means a redirection.
-    connected_once: AtomicBool,
     /// Set when the first Display Control channel connects; another one later
     /// means FreeRDP followed a redirection.
     disp_seen: AtomicBool,
@@ -283,6 +296,11 @@ fn run(
     waker: Arc<FreeRdpWaker>,
     config_dir: String,
 ) {
+    let credentials = config.password.clone().map(|password| Credentials {
+        username: config.username.clone().unwrap_or_default(),
+        domain: config.domain.clone(),
+        password,
+    });
     let state = Arc::new(State {
         sink: Mutex::new(sink),
         frame: Mutex::new(None),
@@ -294,8 +312,8 @@ fn run(
         kerberos_tried: [AtomicBool::new(false), AtomicBool::new(false)],
         cert_rejected: AtomicBool::new(false),
         auth_cancelled: AtomicBool::new(false),
+        credentials: Mutex::new(credentials),
         clip: Default::default(),
-        connected_once: AtomicBool::new(false),
         disp_seen: AtomicBool::new(false),
         stage: AtomicU8::new(u8::MAX),
     });
@@ -565,6 +583,14 @@ unsafe fn classify_error(ctx: *mut ffi::rdpContext, state: &State) -> Disconnect
         return DisconnectReason::Remote("connection closed".into());
     }
     let msg = if text.is_empty() { name.clone() } else { text };
+    if state.config.security == SecurityMode::Nla && name.contains("SECURITY_NEGO_CONNECT_FAILED") {
+        return DisconnectReason::Protocol(
+            "the remote computer may not support Network Level Authentication (NLA), which \
+             this connection requires. Connections from files and links always require it; \
+             to connect anyway, add the computer as a connection and choose TLS security"
+                .into(),
+        );
+    }
     if [
         "AUTHENTICATION_FAILED",
         "LOGON_FAILURE",
@@ -634,9 +660,10 @@ unsafe fn apply_settings(
     if let Some(d) = &cfg.domain {
         set_str(ffi::FreeRDP_Domain, d)?;
     }
-    if let Some(p) = &cfg.password {
-        set_str(ffi::FreeRDP_Password, p.expose_secret())?;
-    }
+    // The password isn't put in the settings: FreeRDP would then send it however
+    // the server chooses, including straight to it after TLS (a server, or whoever
+    // answers for it, can decline NLA). Without it, FreeRDP asks `authenticate_ex`
+    // and says why.
     set_str(ffi::FreeRDP_ConfigPath, config_dir)?;
 
     if cfg.monitors.len() > 1 {
@@ -723,9 +750,13 @@ unsafe fn apply_settings(
         set_bool(ffi::FreeRDP_GatewayHttpTransport, true)?;
         set_bool(ffi::FreeRDP_GatewayRpcTransport, true)?;
         set_bool(ffi::FreeRDP_GatewayHttpUseWebsockets, true)?;
-        set_bool(ffi::FreeRDP_GatewayUseSameCredentials, gw.same_credentials)?;
+        // Never FreeRDP's GatewayUseSameCredentials: it copies the gateway's password
+        // into the server's, which FreeRDP then sends without asking even when the
+        // server declines NLA. Sharing is done here and in `authenticate_ex`.
+        set_bool(ffi::FreeRDP_GatewayUseSameCredentials, false)?;
         // FreeRDP asks (AuthenticateEx, GW_AUTH_*) for whatever is missing here, so
-        // fill the gateway credentials in: the session's when shared.
+        // fill the gateway credentials in: the session's when shared. The gateway
+        // authenticates with NTLM or Kerberos (SPNEGO), never a plain password.
         let (u, d, p) = if gw.same_credentials {
             (&cfg.username, &cfg.domain, &cfg.password)
         } else {
@@ -844,8 +875,46 @@ unsafe extern "C" fn client_new(
         (*instance).AuthenticateEx = Some(authenticate_ex);
         (*instance).VerifyCertificateEx = Some(verify_certificate_ex);
         (*instance).VerifyChangedCertificateEx = Some(verify_changed_certificate_ex);
+        (*instance).Redirect = Some(redirect);
     }
     TRUE
+}
+
+/// FreeRDP is following a Server Redirection PDU: it has applied the new target and
+/// is about to connect to it (or, for a one-time RDSTLS token, back to the broker).
+unsafe extern "C" fn redirect(instance: *mut ffi::freerdp) -> ffi::BOOL {
+    // SAFETY: valid instance with a context and settings, per FreeRDP's contract.
+    unsafe {
+        let ctx = (*instance).context;
+        let Some(state) = state(ctx) else {
+            return FALSE;
+        };
+        let s = (*ctx).settings;
+        // A redirection may carry the target's certificate, which FreeRDP would then
+        // accept without asking. It comes from the server doing the redirecting, so
+        // it says nothing about the target: let the trust store decide, as for any
+        // other connection.
+        if ffi::freerdp_settings_set_string(s, ffi::FreeRDP_RedirectionAcceptedCert, ptr::null())
+            == 0
+            || ffi::freerdp_settings_set_uint32(s, ffi::FreeRDP_RedirectionAcceptedCertLength, 0)
+                == 0
+        {
+            return FALSE;
+        }
+        let target = cstr_lossy(ffi::freerdp_settings_get_string(
+            s,
+            ffi::FreeRDP_ServerHostname,
+        ));
+        // The server chose this name. FreeRDP 3.33 validates it, older versions
+        // don't, and FreeRDP reads `/…` and `|N` as local sockets (`valid_host`).
+        if !valid_host(&target) {
+            tracing::warn!("refusing a redirection to an invalid host name");
+            return FALSE;
+        }
+        tracing::info!(%target, "server redirection");
+        state.emit(EngineEvent::Redirecting { target });
+        TRUE
+    }
 }
 
 type EventHandler = unsafe extern "C" fn(*mut c_void, *const ffi::ChannelConnectedEventArgs);
@@ -862,6 +931,11 @@ struct StateChangedArgs {
     new_state: ffi::CONNECTION_STATE,
 }
 
+/// Server Redirection PDU flags (MS-RDPBCGR 2.2.13.1): the redirection names the
+/// account to log in with.
+const LB_USERNAME: u32 = 0x0000_0004;
+const LB_DOMAIN: u32 = 0x0000_0008;
+
 /// [`State::stage`] once connected: later state changes (a reactivation) aren't
 /// progress to report.
 const STAGE_CONNECTED: u8 = u8::MAX - 1;
@@ -876,16 +950,6 @@ unsafe extern "C" fn pre_connect(instance: *mut ffi::freerdp) -> ffi::BOOL {
         if state(ctx).is_some_and(|s| s.aborted()) {
             tracing::info!("cancelled before connecting");
             return FALSE;
-        }
-        if let Some(state) = state(ctx)
-            && state.connected_once.load(Ordering::SeqCst)
-        {
-            let target = cstr_lossy(ffi::freerdp_settings_get_string(
-                (*ctx).settings,
-                ffi::FreeRDP_ServerHostname,
-            ));
-            tracing::info!(%target, "server redirection");
-            state.emit(EngineEvent::Redirecting { target });
         }
         let ps = (*ctx).pubSub;
         let on: EventHandler = on_channel_connected;
@@ -980,7 +1044,6 @@ unsafe extern "C" fn post_connect(instance: *mut ffi::freerdp) -> ffi::BOOL {
             desktop: ffi::freerdp_settings_get_uint32(s, ffi::FreeRDP_DesktopScaleFactor),
             device: ffi::freerdp_settings_get_uint32(s, ffi::FreeRDP_DeviceScaleFactor),
         };
-        state.connected_once.store(true, Ordering::SeqCst);
         state.stage.store(STAGE_CONNECTED, Ordering::SeqCst);
         tracing::info!(?size, ?scale, "connected");
         state.emit(EngineEvent::Connected {
@@ -1226,18 +1289,20 @@ unsafe extern "C" fn authenticate_ex(
 ) -> ffi::BOOL {
     // SAFETY: valid instance and string slots, per FreeRDP's contract.
     unsafe {
-        let Some(state) = state((*instance).context) else {
+        let ctx = (*instance).context;
+        let Some(state) = state(ctx) else {
             return FALSE;
         };
         let kind = match reason {
             ffi::GW_AUTH_HTTP | ffi::GW_AUTH_RDG | ffi::GW_AUTH_RPC => AuthKind::Gateway,
             _ => AuthKind::Server,
         };
+        let gateway = kind == AuthKind::Gateway;
         // Kerberos single sign-on: answer the first request of each kind (server, and
         // the RD Gateway when there is one) with empty credentials so NLA uses the ticket
         // cache (FreeRDP: "empty credentials = proceed without"). A second request of
         // the same kind means the ticket didn't work: ask the user.
-        let slot = usize::from(kind == AuthKind::Gateway);
+        let slot = usize::from(gateway);
         if state.config.kerberos && !state.kerberos_tried[slot].swap(true, Ordering::SeqCst) {
             let user = cstr_opt(*username)
                 .or_else(|| state.config.username.clone())
@@ -1251,22 +1316,86 @@ unsafe extern "C" fn authenticate_ex(
                 && replace_cstring(password, "");
             return if ok { TRUE } else { FALSE };
         }
+        // How the server password would travel. With NLA it never reaches a server
+        // that can't prove it knows it (CredSSP binds it to the certificate's key).
+        // Without NLA it goes to the server as is: inside TLS (`AUTH_TLS`, after a
+        // certificate check the user may click through), or with legacy RDP security
+        // (`AUTH_RDP`, no certificate at all). A server, or whoever answers for it,
+        // can decline NLA when the profile allows TLS.
+        let unprotected = matches!(reason, ffi::AUTH_TLS | ffi::AUTH_RDP);
+        // The credentials the session has go out without asking only over NLA, or
+        // without it when the profile chose exactly that.
+        let chosen = match reason {
+            ffi::AUTH_NLA => true,
+            ffi::AUTH_TLS => state.config.security == SecurityMode::Tls,
+            ffi::AUTH_RDP => state.config.security == SecurityMode::Rdp,
+            _ => false,
+        };
+        if !gateway && chosen {
+            let known = state
+                .credentials
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            if let Some(c) = known {
+                // The user name and domain that go with this password, unless a
+                // server redirection named the account (as brokers do).
+                let flags = ffi::freerdp_settings_get_uint32(
+                    (*ctx).settings,
+                    ffi::FreeRDP_RedirectionFlags,
+                );
+                let user = match cstr_opt(*username).filter(|u| !u.is_empty()) {
+                    Some(u) if flags & LB_USERNAME != 0 || c.username.is_empty() => u,
+                    _ => c.username,
+                };
+                let dom = match cstr_opt(*domain) {
+                    Some(d) if flags & LB_DOMAIN != 0 || c.domain.is_none() => d,
+                    _ => c.domain.unwrap_or_default(),
+                };
+                let ok = replace_cstring(username, &user)
+                    && replace_cstring(domain, &dom)
+                    && replace_cstring(password, c.password.expose_secret());
+                return if ok { TRUE } else { FALSE };
+            }
+        }
+        if unprotected {
+            tracing::warn!(
+                ?reason,
+                "the server doesn't use NLA; asking before sending a password"
+            );
+        }
+        let host = cstr_lossy(ffi::freerdp_settings_get_string(
+            (*ctx).settings,
+            if gateway {
+                ffi::FreeRDP_GatewayHostname
+            } else {
+                ffi::FreeRDP_ServerHostname
+            },
+        ));
         let (tx, rx) = mpsc::sync_channel(1);
         state.emit(EngineEvent::AuthRequired(AuthRequest {
             kind,
+            host,
             username: cstr_opt(*username),
             domain: cstr_opt(*domain),
+            unprotected,
             reply: tx,
         }));
         match state.wait_reply(&rx).flatten() {
-            Some(Credentials {
-                username: u,
-                domain: d,
-                password: p,
-            }) => {
-                let ok = replace_cstring(username, &u)
-                    && replace_cstring(domain, d.as_deref().unwrap_or(""))
-                    && replace_cstring(password, p.expose_secret());
+            Some(c) => {
+                let ok = replace_cstring(username, &c.username)
+                    && replace_cstring(domain, c.domain.as_deref().unwrap_or(""))
+                    && replace_cstring(password, c.password.expose_secret());
+                // What the user entered for the server, or for a gateway that shares
+                // them, is what the server gets when it asks (over NLA) later on.
+                let shared = state
+                    .config
+                    .gateway
+                    .as_ref()
+                    .is_some_and(|g| g.same_credentials);
+                if !gateway || shared {
+                    *state.credentials.lock().unwrap_or_else(|e| e.into_inner()) = Some(c);
+                }
                 if ok { TRUE } else { FALSE }
             }
             None => {

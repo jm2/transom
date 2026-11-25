@@ -13,23 +13,42 @@ What Transom protects, from whom, and where it falls short. Report problems as
 ## Files and links
 
 - Opening a file or link asks before connecting, and shows where it goes (and through
-  which RD Gateway).
+  which RD Gateway). So does a link pasted into Quick Connect.
 - Such connections share neither the clipboard nor the microphone unless you turn them
   on in that dialog, and never devices: the settings that grant local resources
   (`drivestoredirect`, `redirectsmartcards`, `usbdevicestoredirect`, …) are not taken
   from a file, and not written to an exported one.
-- A file can't turn off network-level authentication or certificate checks, and an RD
-  Gateway gets your password only when the file asks for one.
+- Connections from files and links require Network Level Authentication (NLA): the
+  server must prove it knows your password before it receives it. A server without
+  NLA can be reached by adding it as a connection and choosing TLS.
+- A file can't turn off certificate checks. An RD Gateway the file names gets your
+  credentials only when the file asks for that, and the dialog says so. (It signs you
+  in with NTLM or Kerberos, so it doesn't receive the password itself.)
+- Computer and gateway names must be host names or IP addresses. (FreeRDP reads some
+  other strings as local socket paths or open file descriptors.)
+- Passwords and access tokens in a file (`password`, `gatewayaccesstoken`, …) are
+  neither kept nor exported, and neither are settings that change where mstsc would
+  connect or what it would run there without showing it (`alternate full address`,
+  RemoteApp programs).
 
 ## Certificates and credentials
 
-- Certificates are checked against the system's certificate authorities, then trusted
-  on first use. A certificate that changes is refused unless you explicitly accept it:
-  the warning's default and close actions cancel, and accepting is styled as the
-  dangerous choice.
+- Certificates are checked against the system's certificate authorities. Any other
+  certificate needs your decision, which you can have Transom remember; a remembered
+  certificate that changes is refused unless you explicitly accept it: the warning's
+  default and close actions cancel, and accepting is styled as the dangerous choice.
+  A server that redirects the connection to another computer can't vouch for that
+  computer's certificate; it's checked like any other.
+- A saved or entered password is sent only with NLA, unless the connection's security
+  is set to TLS Only or Allow Legacy RDP Security. When a server declines NLA, Transom
+  asks first and says why: a server, or someone impersonating it, can decline it to
+  have the password sent directly. Legacy RDP security has no certificate at all, so
+  anyone on the network can read a connection that allows it.
 - Passwords go to the system keyring (Secret Service, Keychain or Credential Manager)
-  only when you ask: Remember Password is off by default. They are never passed on a
-  command line or in the environment.
+  only when you ask: Remember Password is off by default, and logging in with it off
+  forgets a saved one. They are never passed on a command line or in the environment.
+- FreeRDP's packet traces (`WLOG_LEVEL=TRACE`) include the password: don't enable them
+  for a connection you care about.
 - The remote computer can read your clipboard only while the session has focus (in
   multi-monitor mode, any of its windows), and only what was offered to it: what you
   copy in other apps is offered when you come back to the session, not before. The

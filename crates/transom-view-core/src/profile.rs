@@ -111,7 +111,38 @@ const UNSAFE_PASSTHROUGH_KEYS: &[&str] = &[
     "authentication level",
     "enablecredsspsupport",
     "password 51",
+    // Secrets: FreeRDP's own files carry a plain `password`, and Azure/AVD files
+    // tokens. Transom never logs in with them, so they'd only sit in the profile and
+    // reappear in exported files.
+    "password",
+    "gatewayaccesstoken",
+    "endpointfedauth",
+    // Where mstsc connects, or what it runs there, without the user seeing it.
+    "alternate full address",
+    "remoteapplicationmode",
+    "remoteapplicationname",
+    "remoteapplicationprogram",
+    "remoteapplicationcmdline",
+    "remoteapplicationexpandcmdline",
+    "remoteapplicationexpandworkingdir",
+    "remoteapplicationfile",
+    "remoteapplicationfileextensions",
+    "remoteapplicationicon",
+    "kdcproxyname",
+    // A signature over the original file; Transom's export is a different file.
+    "signature",
+    "signscope",
 ];
+
+/// Whether an unmodelled key may be kept for export: not one of the above, and
+/// nothing that looks like a secret.
+fn keep_extra(key: &str) -> bool {
+    let k = key.to_ascii_lowercase();
+    !UNSAFE_PASSTHROUGH_KEYS.contains(&k.as_str())
+        && !["password", "token", "secret", "credential"]
+            .iter()
+            .any(|s| k.contains(s))
+}
 
 const MODELLED_KEYS: &[&str] = &[
     "full address",
@@ -193,6 +224,9 @@ impl Profile {
     /// must never be able to turn off certificate checks).
     pub fn from_rdp(f: &RdpFile) -> Option<Self> {
         let (host, port) = f.address()?;
+        if !crate::rdpfile::valid_host(&host) {
+            return None;
+        }
         let mut p = Profile {
             port,
             ..Profile::new(String::new(), host)
@@ -228,7 +262,10 @@ impl Profile {
         if let Some(gw) = f.get_str("gatewayhostname")
             && matches!(f.get_int("gatewayusagemethod").unwrap_or(1), 1 | 2)
         {
-            let (gh, gp) = crate::rdpfile::split_host_port(gw).unwrap_or((gw.to_string(), None));
+            let (gh, gp) = crate::rdpfile::split_host_port(gw)?;
+            if !crate::rdpfile::valid_host(&gh) {
+                return None;
+            }
             p.gateway = Some(Gateway {
                 host: gh,
                 port: gp,
@@ -239,7 +276,7 @@ impl Profile {
             });
         }
         for (k, v) in f.iter() {
-            if !MODELLED_KEYS.contains(&k) && !UNSAFE_PASSTHROUGH_KEYS.contains(&k) {
+            if !MODELLED_KEYS.contains(&k) && keep_extra(k) {
                 let ty = match v {
                     RdpValue::Str(_) => 's',
                     RdpValue::Int(_) => 'i',
@@ -287,7 +324,8 @@ impl Profile {
             f.set_int("gatewayusagemethod", 1);
             f.set_int("promptcredentialonce", g.same_credentials as i64);
         }
-        for (k, tv) in &self.rdp_extra {
+        // Profiles saved by older versions may still hold keys no longer kept.
+        for (k, tv) in self.rdp_extra.iter().filter(|(k, _)| keep_extra(k)) {
             if f.get(k).is_none()
                 && let Some((k2, v)) = RdpFile::parse_str(&format!("{k}:{tv}")).iter().next()
             {
@@ -342,8 +380,20 @@ impl Profile {
         toml::to_string_pretty(self)
     }
 
+    /// Parse a saved profile. Unmodelled keys that are no longer kept (secrets an
+    /// older version imported) are dropped.
     pub fn from_toml(s: &str) -> Result<Self, toml::de::Error> {
-        toml::from_str(s)
+        Self::from_toml_cleaned(s).map(|(p, _)| p)
+    }
+
+    /// [`Self::from_toml`], and whether it dropped anything (so the file should be
+    /// written again without it).
+    fn from_toml_cleaned(s: &str) -> Result<(Self, bool), toml::de::Error> {
+        let mut p: Self = toml::from_str(s)?;
+        let before = p.rdp_extra.len();
+        p.rdp_extra.retain(|k, _| keep_extra(k));
+        let dropped = p.rdp_extra.len() != before;
+        Ok((p, dropped))
     }
 }
 
@@ -415,9 +465,13 @@ impl ProfileStore {
                 continue;
             }
             match std::fs::read_to_string(&path) {
-                Ok(text) => match Profile::from_toml(&text) {
-                    Ok(mut p) => {
+                Ok(text) => match Profile::from_toml_cleaned(&text) {
+                    Ok((mut p, dropped)) => {
                         p.id = stem.to_string(); // the file name is authoritative
+                        // Don't leave an imported password (v0.1.0 kept them) on disk.
+                        if dropped && let Err(e) = self.save(&p) {
+                            errors.push(e);
+                        }
                         profiles.push(p);
                     }
                     Err(source) => errors.push(ProfileError::Parse { path, source }),
@@ -511,6 +565,64 @@ mod tests {
         assert_eq!(back.address(), Some(("pc.corp".into(), 3390)));
         assert_eq!(back.get_int("keyboardhook"), Some(2));
         assert_eq!(back.get("password 51"), None);
+    }
+
+    #[test]
+    fn secrets_and_hidden_targets_are_not_kept() {
+        let f = RdpFile::parse_str(
+            "full address:s:pc.corp\r\npassword:s:Hunter2!\r\ngatewayaccesstoken:s:tok\r\n\
+             endpointfedauth:s:x\r\nalternate full address:s:evil.example\r\n\
+             remoteapplicationprogram:s:||x\r\nkdcproxyname:s:kdc.evil\r\n\
+             signature:s:AAAA\r\nmy secret thing:s:x\r\nkeyboardhook:i:2\r\n",
+        );
+        let p = Profile::from_rdp(&f).unwrap();
+        assert_eq!(p.rdp_extra.keys().collect::<Vec<_>>(), ["keyboardhook"]);
+        let text = p.to_rdp().to_text();
+        for k in [
+            "password",
+            "token",
+            "alternate",
+            "remoteapp",
+            "kdcproxy",
+            "signature",
+        ] {
+            assert!(!text.contains(k), "{k} exported: {text}");
+        }
+    }
+
+    #[test]
+    fn secrets_saved_by_older_versions_are_dropped_on_load() {
+        let toml = "id = \"abc\"\nhost = \"pc\"\n[rdp_extra]\npassword = \"s:Hunter2!\"\n\
+                    keyboardhook = \"i:2\"\n";
+        let (p, dropped) = Profile::from_toml_cleaned(toml).unwrap();
+        assert!(dropped);
+        assert!(!p.rdp_extra.contains_key("password"));
+        assert!(p.rdp_extra.contains_key("keyboardhook"));
+        assert!(!p.to_rdp().to_text().contains("Hunter2"));
+    }
+
+    #[test]
+    fn hosts_freerdp_treats_specially_are_refused() {
+        for addr in [
+            "full address:s:|5",
+            "full address:s:/run/user/1000/bus",
+            "full address:s:vsock://2:x",
+            "full address:s:pc.corp\r\ngatewayhostname:s:/tmp/sock",
+            "full address:s:pc.corp\r\ngatewayhostname:s:|7",
+        ] {
+            assert!(
+                Profile::from_rdp(&RdpFile::parse_str(addr)).is_none(),
+                "{addr}"
+            );
+        }
+    }
+
+    #[test]
+    fn exported_values_stay_on_one_line() {
+        let mut p = Profile::new(String::new(), "pc");
+        p.username = Some("jm\r\ndrivestoredirect:s:*".into());
+        let text = p.to_rdp().to_text();
+        assert!(!text.contains("\ndrivestoredirect"), "{text}");
     }
 
     #[test]

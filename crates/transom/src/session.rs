@@ -31,8 +31,9 @@ pub struct Session {
     state: Rc<AppState>,
     page: RefCell<Option<adw::TabPage>>,
     closing: Cell<bool>,
-    /// Password typed in the auth dialog with "remember" on; stored after success.
-    pending_remember: RefCell<Option<SecretString>>,
+    /// The last server prompt's answer, applied once it logs in: `Some(Some(pw))`
+    /// saves `pw`, `Some(None)` (Remember Password off) forgets a saved one.
+    pending_remember: RefCell<Option<Option<SecretString>>>,
     auth_failures: Cell<u32>,
     skip_saved_password: Cell<bool>,
     /// Fullscreen windows on the other monitors (multi-monitor mode).
@@ -151,60 +152,69 @@ impl Session {
             let Some(s) = weak.upgrade() else { return };
             let gateway = req.kind == AuthKind::Gateway;
             let target = if gateway {
-                let host = s.profile.borrow().gateway.as_ref().map(|g| g.host.clone());
-                format!("the RD Gateway {}", host.unwrap_or_default())
+                format!("the RD Gateway {}", req.host)
             } else {
-                // Name the actual host: a file's name is whatever its sender chose.
+                // Name the actual host: a file's name is whatever its sender chose,
+                // and a server may have redirected the connection elsewhere.
                 let p = s.profile.borrow();
                 let (name, addr) = (p.display_name(), p.address());
-                if name == addr || name == p.host {
+                if !req.host.is_empty() && !req.host.eq_ignore_ascii_case(&p.host) {
+                    format!("{} (redirected from {addr})", req.host)
+                } else if name == addr || name == p.host {
                     addr
                 } else {
                     format!("{name} ({addr})")
                 }
             };
+            let warning = req.unprotected.then_some(
+                "This computer didn't accept Network Level Authentication, so your \
+                 password goes to it directly. If it normally does, someone may be \
+                 intercepting the connection: cancel. (To stop this question for a \
+                 computer that never supports NLA, choose TLS security in its settings.)",
+            );
             let s2 = s.clone();
             let failed = s.auth_failures.get() > 0;
             // The keyring entry holds the server password; never put a gateway's there.
             let can_remember = !gateway && !s.temporary && secrets::AVAILABLE;
             let (user, domain) = (req.username.clone(), req.domain.clone());
-            dialogs::credentials(
-                view,
-                &target,
-                user.as_deref(),
-                domain.as_deref(),
+            let prompt = dialogs::CredentialPrompt {
+                target: &target,
+                username: user.as_deref(),
+                domain: domain.as_deref(),
                 can_remember,
-                failed,
-                move |entered| match entered {
-                    Some(c) => {
-                        // Only the latest server answer counts: an earlier "remember"
-                        // must not save a password typed later with it turned off. A
-                        // gateway answer (never remembered) leaves it alone.
-                        if !gateway {
-                            *s2.pending_remember.borrow_mut() =
-                                c.remember.then(|| c.password.clone());
-                        }
-                        let mut p = s2.profile.borrow_mut();
-                        if gateway {
-                            if let Some(g) = p.gateway.as_mut() {
-                                g.username = Some(c.username.clone()).filter(|u| !u.is_empty());
-                            }
-                        } else {
-                            p.username = Some(c.username.clone()).filter(|u| !u.is_empty());
-                            p.domain = c.domain.clone();
-                        }
-                        drop(p);
-                        let _ = req.reply.send(Some(Credentials {
-                            username: c.username,
-                            domain: c.domain,
-                            password: c.password,
-                        }));
+                failed_before: failed,
+                warning,
+            };
+            dialogs::credentials(view, prompt, move |entered| match entered {
+                Some(c) => {
+                    // Only the latest server answer counts: an earlier "remember"
+                    // must not save a password typed later with it turned off,
+                    // and turning it off forgets a saved one. A gateway answer
+                    // (never remembered) leaves it alone.
+                    if !gateway && can_remember {
+                        *s2.pending_remember.borrow_mut() =
+                            Some(c.remember.then(|| c.password.clone()));
                     }
-                    None => {
-                        let _ = req.reply.send(None);
+                    let mut p = s2.profile.borrow_mut();
+                    if gateway {
+                        if let Some(g) = p.gateway.as_mut() {
+                            g.username = Some(c.username.clone()).filter(|u| !u.is_empty());
+                        }
+                    } else {
+                        p.username = Some(c.username.clone()).filter(|u| !u.is_empty());
+                        p.domain = c.domain.clone();
                     }
-                },
-            );
+                    drop(p);
+                    let _ = req.reply.send(Some(Credentials {
+                        username: c.username,
+                        domain: c.domain,
+                        password: c.password,
+                    }));
+                }
+                None => {
+                    let _ = req.reply.send(None);
+                }
+            });
         });
 
         let weak = Rc::downgrade(self);
@@ -278,13 +288,21 @@ impl Session {
         if let Err(e) = self.state.profiles.save(&profile) {
             tracing::warn!("saving profile: {e}");
         }
-        if let Some(pw) = self.pending_remember.borrow_mut().take() {
-            let label = format!("Transom: {}", profile.display_name());
-            glib::spawn_future_local(async move {
-                if let Err(e) = secrets::store(&profile.id, &label, &pw).await {
-                    tracing::warn!("saving password: {e}");
-                }
-            });
+        match self.pending_remember.borrow_mut().take() {
+            Some(Some(pw)) => {
+                let label = format!("Transom: {}", profile.display_name());
+                self.state.secret_op(async move {
+                    if let Err(e) = secrets::store(&profile.id, &label, &pw).await {
+                        tracing::warn!("saving password: {e}");
+                    }
+                });
+            }
+            // Logged in with Remember Password off: don't keep an old one either.
+            Some(None) => {
+                self.state
+                    .secret_op(async move { secrets::clear(&profile.id).await });
+            }
+            None => {}
         }
         self.skip_saved_password.set(false);
     }
