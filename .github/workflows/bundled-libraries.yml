@@ -1,6 +1,7 @@
 # The AppImage, macOS and Windows packages bundle FreeRDP, FFmpeg, OpenSSL and the
-# libraries that parse what a server sends, and the Flatpak pins FreeRDP's source:
-# none of them gets a distribution's security updates (SECURITY.md). Weekly, compare
+# libraries that parse what a server sends, and the Flatpak and the AppImage build
+# FreeRDP from the source the Flatpak manifest pins: none of them gets a
+# distribution's security updates (SECURITY.md). Weekly, compare
 # what their sources offer with build-aux/packaging/bundled-versions.txt (recorded at
 # the last release) and keep one issue open listing what moved, so the packages get
 # rebuilt and released. scripts/bundled-versions.py --write records the new versions
@@ -59,7 +60,7 @@ jobs:
             echo "When a change fixes a security problem (check the package's changelog or advisory),"
             echo "rebuild and release (docs/packaging.md), then record the new versions with"
             echo '`scripts/bundled-versions.py --write`. The Flatpak rows name the source pins to'
-            echo "update in build-aux/flatpak/io.github.jm2.Transom.yml."
+            echo "update in build-aux/flatpak/io.github.jm2.Transom.yml (the AppImage builds the same FreeRDP)."
             echo
             cat report.md
             echo
