@@ -43,6 +43,9 @@ const MAX_FILE_CHUNK: u32 = 8 * 1024 * 1024;
 const FILE_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 /// How long the remote has to deliver the clipboard content it announced.
 const FETCH_TIMEOUT: Duration = Duration::from_secs(60);
+/// How long a read of the local clipboard (or the walk of the files on it) may take
+/// before the remote's request is answered with a failure.
+const LOCAL_READ_TIMEOUT: Duration = Duration::from_secs(30);
 /// The clipboard type KDE's password managers and KeePassXC put on secrets. macOS's
 /// markers aren't visible through GDK: see [`PlatformClipboard`].
 const CONCEALED_TYPES: &[&str] = &["x-kde-passwordManagerHint"];
@@ -348,6 +351,11 @@ impl ClipboardBridge {
             let mut s = self.0.borrow_mut();
             // The files offered before are gone: not readable by index any more.
             s.local_files.clear();
+            // The local copy is newer than a remote change still pending or being
+            // fetched (focus can return before GDK reports the copy): that must not
+            // replace it.
+            s.pending_remote = None;
+            s.cancel_fetch();
             s.gate.local_changed()
         };
         // Copies made in other apps while this session is in the background aren't
@@ -468,9 +476,25 @@ impl ClipboardBridge {
         };
         let view = view.clone();
         let bridge = self.clone();
+        // Reads are bounded: an application that never delivers its clipboard mustn't
+        // keep this format busy (and every later request for it refused).
+        let timed_out = |format| {
+            tracing::debug!(?format, "local clipboard read timed out");
+        };
         glib::spawn_future_local(async move {
             if format == ClipFormat::Files {
-                let mut files = read_local_files(&cb).await.unwrap_or_default();
+                let mut files = match glib::future_with_timeout(
+                    LOCAL_READ_TIMEOUT,
+                    read_local_files(&cb),
+                )
+                .await
+                {
+                    Ok(files) => files.unwrap_or_default(),
+                    Err(_) => {
+                        timed_out(format);
+                        Vec::new()
+                    }
+                };
                 if !bridge.finish_read(session, format) {
                     return;
                 }
@@ -486,7 +510,18 @@ impl ClipboardBridge {
                 view.send_command(EngineCommand::ClipboardReply { format, data });
                 return;
             }
-            let mut data = read_local(&cb, format).await;
+            let mut data = match glib::future_with_timeout(
+                LOCAL_READ_TIMEOUT,
+                read_local(&cb, format),
+            )
+            .await
+            {
+                Ok(data) => data,
+                Err(_) => {
+                    timed_out(format);
+                    None
+                }
+            };
             if !bridge.finish_read(session, format) {
                 return;
             }
@@ -845,8 +880,8 @@ fn readable_len(size: u64, offset: u64, len: u32) -> u32 {
         .min(u64::from(len.min(MAX_FILE_CHUNK))) as u32
 }
 
-/// Open a file we offered, if it is still that file: a regular file, not a link put
-/// in its place (which isn't followed), and on Unix the same device and inode.
+/// Open a file we offered, if it is still a regular file and not a link put in its
+/// place (which isn't followed); on Unix, also the same device and inode.
 fn open_offered(f: &LocalFile) -> Option<std::fs::File> {
     #[cfg(unix)]
     {
@@ -861,19 +896,26 @@ fn open_offered(f: &LocalFile) -> Option<std::fs::File> {
         let m = file.metadata().ok()?;
         (m.is_file() && (m.dev(), m.ino()) == f.id).then_some(file)
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     {
-        // No O_NOFOLLOW here: check that the path isn't a link (or junction) right
-        // before opening it, and that what was opened is a regular file.
-        if !std::fs::symlink_metadata(&f.path)
-            .ok()?
-            .file_type()
-            .is_file()
-        {
-            return None;
-        }
-        let file = std::fs::File::open(&f.path).ok()?;
-        file.metadata().ok()?.is_file().then_some(file)
+        use std::os::windows::fs::OpenOptionsExt;
+        // FILE_FLAG_OPEN_REPARSE_POINT: a link or junction put in its place is opened
+        // itself, not followed, and isn't a regular file, so it's refused below.
+        // There's no identity check here (the volume serial number and file index
+        // aren't in stable std yet): a different regular file put at the same path
+        // is read, up to the size that was offered.
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(&f.path)
+            .ok()?;
+        file.metadata().ok()?.file_type().is_file().then_some(file)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = f;
+        None
     }
 }
 

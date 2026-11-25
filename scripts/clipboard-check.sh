@@ -179,10 +179,13 @@ fc=transom-clip-focus
 focus_cmd() { podman exec "$fc" bash -c "printf '%s\n' \"\$1\" >> /tmp/clip-focus-cmd" _ "$1"; }
 run_focus_demo() { # log-file monitor2 demo-args...
     local log=$1 m2=$2; shift 2
+    # The bridge's and the channel's debug lines (no clipboard contents) show who
+    # refused a read.
+    local filter="transom_view::clipboard=debug,transom_view_freerdp::cliprdr=debug"
     podman rm -f "$fc" >/dev/null 2>&1 || true
     podman run --rm --name "$fc" --network host --userns=keep-id \
         -e SCALE=1 -e MONITOR=1600x1000 -e MONITOR2="$m2" -e SCALE2_STATIC=1 \
-        -e BIN=/demo/examples/transom-view-demo -e RUST_LOG="${RUST_LOG:-}" \
+        -e BIN=/demo/examples/transom-view-demo -e RUST_LOG="${RUST_LOG:+$RUST_LOG,}$filter" \
         -e INJECT=/checks/clip-focus.py -e INJECT_AFTER=1 \
         -v "$PWD/tests/servers/view-check:/checks:ro,Z" \
         -v "$PWD/target/debug:/demo:ro,Z" \
@@ -212,25 +215,34 @@ probe_cmd paste; sleep 2                                             # 3
 wait "$demo" || true
 podman exec transom-grd pkill -f input-probe || true
 podman exec transom-grd cat /tmp/input-probe.log > "$STATE/focus-probe.log" 2>/dev/null || true
-python3 -I - "$STATE/focus-probe.log" "$canary" <<'PY' || ok=0
-import json, sys
-reads = [e for e in (json.loads(l) for l in open(sys.argv[1]) if l.strip())
+python3 -I - "$STATE/focus-probe.log" "$STATE/focus-clip.log" "$canary" <<'PY' || ok=0
+import json, re, sys
+probe, client, canary = sys.argv[1:4]
+reads = [e for e in (json.loads(l) for l in open(probe) if l.strip())
          if e["t"] in ("paste", "paste-raw")]
-def text(e):
-    if e["t"] == "paste":
-        return e.get("text") or ""
-    try:
-        return bytes.fromhex(e.get("hex", "")).decode("utf-8", "replace")
-    except ValueError:
-        return ""
-checks = [("offered copy pasted", "first local copy", True),
-          ("background copy not readable", sys.argv[2], False),
-          ("background copy offered on return", sys.argv[2], True)]
+log = open(client, errors="replace").read()
+def pasted(e, want):
+    return e["t"] == "paste" and "error" not in e and want in (e.get("text") or "")
+def refused(e):
+    # A read the client answers with a failure reaches the probe as an empty read,
+    # not an error: any error (or missing data) fails the check.
+    return (e["t"] == "paste-raw" and e.get("mime") == "text/html"
+            and "error" not in e and e.get("hex") == "")
+checks = [("offered copy pasted", lambda e: pasted(e, "first local copy")),
+          ("background copy answered with nothing", refused),
+          ("background copy offered on return", lambda e: pasted(e, canary))]
 ok = len(reads) == len(checks)
-for i, (label, want, present) in enumerate(checks):
-    good = i < len(reads) and (want in text(reads[i])) == present
+for i, (label, check) in enumerate(checks):
+    good = i < len(reads) and check(reads[i])
     ok &= good
     print(f"focus {label}: {'OK' if good else 'FAILED'}")
+# And it was the client's focus check that refused it: the bridge declined, the
+# channel answered the HTML request with a failure, and never with data.
+good = ("not answering the remote's clipboard request" in log
+        and re.search(r"cliprdr: clipboard reply format=Html$", log, re.M) is not None
+        and "clipboard reply format=Html len=" not in log)
+ok &= good
+print(f"focus background read refused by the client: {'OK' if good else 'FAILED'}")
 sys.exit(0 if ok else 1)
 PY
 

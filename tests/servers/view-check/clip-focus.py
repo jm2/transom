@@ -68,14 +68,21 @@ def copy(text):
     ]))
 
 
+offset = 0  # bytes of CMD already dispatched (the file is append-only)
+
+
 def poll():
+    global offset
     try:
-        with open(CMD) as f:
-            lines = f.read().splitlines()
-        open(CMD, "w").close()
+        with open(CMD, "rb") as f:
+            f.seek(offset)
+            data = f.read()
     except FileNotFoundError:
         return True
-    for line in lines:
+    # Only whole lines: one still being appended is read on the next poll.
+    end = data.rfind(b"\n") + 1
+    offset += end
+    for line in data[:end].decode().splitlines():
         cmd, _, arg = line.partition(" ")
         if cmd == "click":
             x, y = arg.split()
