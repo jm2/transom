@@ -232,11 +232,13 @@ pub struct VideoUpdate {
     pub region: Region,
 }
 
-/// Fold `later` into `earlier` so that applying the result does what applying both
-/// in turn would: one update per surface, carrying the newest frame and region.
+/// Fold `later` into `earlier` so that applying the result in order does what applying
+/// both in turn would, carrying the newest frame and region. `earlier` may name a
+/// surface more than once (an engine's update list can remove a surface and then show
+/// its replacement), so each update merges into the *last* entry for its surface.
 pub fn merge_updates(earlier: &mut Vec<VideoUpdate>, later: Vec<VideoUpdate>) {
     for u in later {
-        match earlier.iter_mut().find(|e| e.surface == u.surface) {
+        match earlier.iter_mut().rev().find(|e| e.surface == u.surface) {
             None => earlier.push(u),
             // After a removal, an update without a frame has no layer to change.
             Some(e) if e.region.is_empty() && u.frame.is_none() => {}
@@ -386,6 +388,62 @@ mod tests {
         let mut v = vec![update(1, frame(5), a)];
         merge_updates(&mut v, vec![update(1, None, Rect::default())]);
         assert!(v[0].region.is_empty());
+    }
+
+    /// Apply updates as the view does: an empty region removes the layer; a frame
+    /// creates or replaces it; otherwise an existing layer takes the new region.
+    /// Layers are (frame width, region) by surface.
+    #[cfg(unix)]
+    fn apply(layers: &mut std::collections::BTreeMap<u16, (u32, Region)>, updates: &[VideoUpdate]) {
+        for u in updates {
+            if u.region.is_empty() {
+                layers.remove(&u.surface);
+            } else if let Some(f) = &u.frame {
+                layers.insert(u.surface, (f.width, u.region.clone()));
+            } else if let Some(l) = layers.get_mut(&u.surface) {
+                l.1 = u.region.clone();
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn merging_matches_applying_in_turn() {
+        let (a, b) = (Rect::new(0, 0, 8, 8), Rect::new(4, 0, 8, 8));
+        let gone = Rect::default();
+        // Batches as the engine emits them, in order. The first names surface 1
+        // twice: removed, then its replacement shown.
+        let cases = vec![
+            vec![
+                vec![update(1, None, gone), update(1, frame(1), a)],
+                vec![update(1, None, gone)],
+            ],
+            vec![
+                vec![update(1, None, gone), update(1, frame(1), a)],
+                vec![update(1, None, b)],
+                vec![update(2, frame(2), a), update(1, None, gone)],
+                vec![update(1, frame(3), b)],
+            ],
+            vec![
+                vec![update(1, frame(1), a)],
+                vec![update(1, None, gone), update(1, None, b)],
+            ],
+        ];
+        for batches in cases {
+            let mut start = std::collections::BTreeMap::new();
+            start.insert(1, (9, region(a))); // a layer shown before
+            let mut in_turn = start.clone();
+            // The queue stores the first batch as it came.
+            let mut merged = batches[0].clone();
+            apply(&mut in_turn, &batches[0]);
+            for batch in &batches[1..] {
+                apply(&mut in_turn, batch);
+                merge_updates(&mut merged, batch.clone());
+            }
+            let mut at_once = start;
+            apply(&mut at_once, &merged);
+            assert_eq!(at_once, in_turn);
+        }
     }
 
     #[cfg(unix)]
