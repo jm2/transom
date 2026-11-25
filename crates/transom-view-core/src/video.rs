@@ -83,15 +83,22 @@ impl Region {
         }
     }
 
-    /// Shift every rectangle by `(dx, dy)` (e.g. surface → desktop coordinates).
+    /// Shift every rectangle by `(dx, dy)` (e.g. surface → desktop coordinates),
+    /// saturating at `u32::MAX`.
     pub fn translated(&self, dx: u32, dy: u32) -> Region {
         Region {
-            rects: self
-                .rects
-                .iter()
-                .map(|r| Rect::new(r.x + dx, r.y + dy, r.width, r.height))
-                .collect(),
+            rects: self.rects.iter().map(|r| shifted(*r, dx, dy)).collect(),
         }
+    }
+
+    /// Where a layer showing this region (surface coordinates) of a surface placed
+    /// at `origin` may draw: each rectangle moved to desktop coordinates and clipped to
+    /// `bounds` (the desktop, or the part of it a view shows). The origin comes from
+    /// the server and is checked by nobody else against the desktop size.
+    pub fn placed(&self, origin: (u32, u32), bounds: Rect) -> impl Iterator<Item = Rect> + '_ {
+        self.rects
+            .iter()
+            .filter_map(move |r| shifted(*r, origin.0, origin.1).intersect(bounds))
     }
 
     pub fn area(&self) -> u64 {
@@ -100,6 +107,15 @@ impl Region {
             .map(|r| r.width as u64 * r.height as u64)
             .sum()
     }
+}
+
+fn shifted(r: Rect, dx: u32, dy: u32) -> Rect {
+    Rect::new(
+        r.x.saturating_add(dx),
+        r.y.saturating_add(dy),
+        r.width,
+        r.height,
+    )
 }
 
 /// `a` minus `b` as up to four rectangles (top, bottom, left, right bands).
@@ -216,6 +232,25 @@ pub struct VideoUpdate {
     pub region: Region,
 }
 
+/// Fold `later` into `earlier` so that applying the result does what applying both
+/// in turn would: one update per surface, carrying the newest frame and region.
+pub fn merge_updates(earlier: &mut Vec<VideoUpdate>, later: Vec<VideoUpdate>) {
+    for u in later {
+        match earlier.iter_mut().find(|e| e.surface == u.surface) {
+            None => earlier.push(u),
+            // After a removal, an update without a frame has no layer to change.
+            Some(e) if e.region.is_empty() && u.frame.is_none() => {}
+            Some(e) => {
+                e.origin = u.origin;
+                if u.frame.is_some() {
+                    e.frame = u.frame;
+                }
+                e.region = u.region;
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -261,6 +296,96 @@ mod tests {
         assert_eq!(area(&i), 5 * 5 * 2);
         let t = r.translated(100, 7);
         assert_eq!(t.rects()[0], Rect::new(100, 7, 10, 10));
+        let t = r.translated(u32::MAX - 5, 0);
+        assert_eq!(t.rects()[0], Rect::new(u32::MAX - 5, 0, 10, 10));
+        assert_eq!(t.rects()[1], Rect::new(u32::MAX, 0, 10, 10)); // saturated
+    }
+
+    #[test]
+    fn placed_layers_stay_inside_the_bounds() {
+        let mut r = Region::new();
+        r.union_rect(Rect::new(0, 0, 100, 50));
+        r.union_rect(Rect::new(0, 50, 10, 10));
+        let desktop = Rect::new(0, 0, 1920, 1080);
+        let at = |origin| r.placed(origin, desktop).collect::<Vec<_>>();
+        // Inside: just moved.
+        assert_eq!(
+            at((10, 20)),
+            [Rect::new(10, 20, 100, 50), Rect::new(10, 70, 10, 10)]
+        );
+        // Straddling the right and bottom edges: cut at the desktop.
+        assert_eq!(at((1870, 1040)), [Rect::new(1870, 1040, 50, 40)]);
+        // Entirely outside (the letterbox), and an origin that would overflow.
+        assert!(at((32766, 0)).is_empty());
+        assert!(at((u32::MAX, u32::MAX)).is_empty());
+        // A follower's part of the desktop.
+        let part = Rect::new(1920, 0, 1920, 1080);
+        let v: Vec<_> = r.placed((1900, 0), part).collect();
+        assert_eq!(v, [Rect::new(1920, 0, 80, 50)]);
+    }
+
+    #[cfg(unix)]
+    fn region(r: Rect) -> Region {
+        let mut g = Region::new();
+        g.union_rect(r);
+        g
+    }
+
+    #[cfg(unix)]
+    fn update(surface: u16, frame: Option<Arc<DmabufFrame>>, r: Rect) -> VideoUpdate {
+        VideoUpdate {
+            surface,
+            origin: (r.x, 0),
+            frame,
+            region: region(r),
+        }
+    }
+
+    #[cfg(unix)]
+    fn frame(width: u32) -> Option<Arc<DmabufFrame>> {
+        Some(Arc::new(DmabufFrame::new(
+            width,
+            16,
+            FOURCC_NV12,
+            0,
+            Vec::new(),
+            Box::new(()),
+        )))
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn merged_updates_keep_the_newest_frame_and_region() {
+        let (a, b) = (Rect::new(0, 0, 8, 8), Rect::new(4, 0, 8, 8));
+        let mut v = vec![update(1, frame(1), a), update(2, frame(2), a)];
+        merge_updates(
+            &mut v,
+            vec![
+                update(1, None, b),               // region only: frame 1 stays
+                update(2, frame(3), b),           // new frame
+                update(3, None, Rect::default()), // removal of another layer
+            ],
+        );
+        assert_eq!(v.len(), 3);
+        assert_eq!(v[0].frame.as_ref().map(|f| f.width), Some(1));
+        assert_eq!((v[0].origin, &v[0].region), ((4, 0), &region(b)));
+        assert_eq!(v[1].frame.as_ref().map(|f| f.width), Some(3));
+        assert!(v[2].region.is_empty());
+
+        // Removed, then shown again with a frame: the new frame; removed, then a
+        // region-only change: still removed.
+        let mut v = vec![
+            update(1, None, Rect::default()),
+            update(2, None, Rect::default()),
+        ];
+        merge_updates(&mut v, vec![update(1, frame(4), b), update(2, None, b)]);
+        assert_eq!(v[0].frame.as_ref().map(|f| f.width), Some(4));
+        assert_eq!(v[0].region, region(b));
+        assert!(v[1].region.is_empty());
+        // Shown, then removed: removed.
+        let mut v = vec![update(1, frame(5), a)];
+        merge_updates(&mut v, vec![update(1, None, Rect::default())]);
+        assert!(v[0].region.is_empty());
     }
 
     #[cfg(unix)]

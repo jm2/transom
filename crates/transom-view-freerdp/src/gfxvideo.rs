@@ -50,13 +50,21 @@ struct Orig {
     end_frame: ffi::pcRdpgfxEndFrame,
 }
 
-/// Most region rectangles taken from one AVC420 command, and kept per surface (the
-/// server controls both counts, and region bookkeeping and rendering cost grow with
-/// them). Past these, the video pixels go to the framebuffer instead (`flatten`): the
-/// hardware decoder keeps decoding, since a software decoder taking over mid-stream
-/// would lack the stream's parameter sets and reference frames until the next IDR.
+/// Most region rectangles taken into the video region from one AVC420 command, and
+/// kept per surface (the server controls both counts, and region bookkeeping and
+/// rendering cost grow with them). These switch strategy, they don't refuse: past
+/// them, the video pixels go to the framebuffer instead (`flatten`). The hardware
+/// decoder keeps decoding, since a software decoder taking over mid-stream would lack
+/// the stream's parameter sets and reference frames until the next IDR.
 const MAX_COMMAND_RECTS: usize = 64;
 const MAX_SURFACE_RECTS: usize = 256;
+/// Most region rectangles one AVC420 command may bring at all: one per 64 × 64 block
+/// of an 8192 × 8192 surface. A command with more is decoded (to keep the decoder's
+/// state) but its pixels are skipped, as for rectangles that overlap too much.
+const MAX_REGION_RECTS: usize = 16384;
+/// FreeRDP's `GDI_GFX_MAX_INVALID_RECTS`: a surface's invalid region past this many
+/// rectangles becomes its bounding box (see [`invalidate`]).
+const MAX_INVALID_RECTS: usize = 256;
 /// Hardware decoders (one VA-API device and frame pool each) per session; further
 /// surfaces decode in software.
 const MAX_HW_DECODERS: usize = 4;
@@ -127,12 +135,42 @@ impl Video {
         self.disable.store(true, Ordering::SeqCst);
     }
 
-    /// Video layer changes since the last call, for the next `FrameUpdate`.
-    pub(crate) fn take_updates(&self) -> Vec<VideoUpdate> {
+    /// Emit a `FrameUpdate` with `damage` and the video layer changes since the last
+    /// one (nothing if both are empty).
+    ///
+    /// Updates are emitted with the hooks locked, as are the `VideoReset`s of
+    /// `attach`/`detach`: a paint on another thread can't take changes from a graphics
+    /// channel and deliver them after that channel's reset.
+    pub(crate) fn emit_frame(&self, st: &State, damage: Vec<Rect>) {
         let mut g = self.hooks.lock().unwrap_or_else(|e| e.into_inner());
-        let Some(h) = g.as_mut() else {
-            return Vec::new();
-        };
+        let video = g.as_mut().map(|h| self.updates(h)).unwrap_or_default();
+        if !damage.is_empty() || !video.is_empty() {
+            st.emit(EngineEvent::FrameUpdate { damage, video });
+        }
+    }
+
+    /// Emit `ev`, on which the renderer drops every video layer (a redirection), then
+    /// send the layers that are current again so none stays missing.
+    pub(crate) fn emit_reset(&self, st: &State, ev: EngineEvent) {
+        let mut g = self.hooks.lock().unwrap_or_else(|e| e.into_inner());
+        st.emit(ev);
+        let Some(h) = g.as_mut() else { return };
+        h.removed.clear();
+        for s in h.surfaces.values_mut() {
+            s.shown = false;
+            s.dirty = true;
+        }
+        let video = self.updates(h);
+        if !video.is_empty() {
+            st.emit(EngineEvent::FrameUpdate {
+                damage: Vec::new(),
+                video,
+            });
+        }
+    }
+
+    /// Video layer changes since the last call (hooks locked by the caller).
+    fn updates(&self, h: &mut Hooks) -> Vec<VideoUpdate> {
         let mut out: Vec<VideoUpdate> = h
             .removed
             .drain(..)
@@ -192,22 +230,47 @@ impl Video {
     }
 }
 
-/// Install the hooks on a freshly initialised graphics pipeline (after FreeRDP's
-/// gdi_graphics_pipeline_init), if hardware decoding is wanted and works.
+/// A graphics channel opened. The renderer drops every video layer (any left from an
+/// earlier channel belong to surfaces that no longer exist), and the hooks are
+/// installed on the freshly initialised pipeline (after FreeRDP's
+/// gdi_graphics_pipeline_init) if hardware decoding is wanted and works.
+///
+/// The function pointers are never restored: FreeRDP's GDI sets all of them again
+/// whenever a graphics channel opens, and clears `custom` when one closes, after which
+/// the hooks find no state and do nothing.
 ///
 /// # Safety
 /// `gfx` must be the live RdpgfxClientContext set up by FreeRDP's GDI.
 pub(crate) unsafe fn attach(state: &State, gfx: *mut ffi::RdpgfxClientContext) {
+    let mut hooks = state.video.hooks.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(old) = hooks.take() {
+        // No detach for the previous channel: its surfaces are gone all the same.
+        old.log_stats();
+    }
+    state.emit(EngineEvent::VideoReset);
     if state.config.video_decode == VideoDecode::Software
         || !crate::hwdec::available()
         || state.video.off.load(Ordering::SeqCst)
     {
         return;
     }
+    let ours: unsafe extern "C" fn(
+        *mut ffi::RdpgfxClientContext,
+        *const ffi::RDPGFX_SURFACE_COMMAND,
+    ) -> ffi::UINT = surface_command;
     // SAFETY: valid context per the contract; we replace FreeRDP's function
     // pointers with ours and keep the originals to call through.
-    unsafe {
+    let orig = unsafe {
         let g = &mut *gfx;
+        if g.custom.is_null()
+            || g.SurfaceCommand
+                .is_some_and(|f| std::ptr::fn_addr_eq(f, ours))
+        {
+            // FreeRDP's GDI didn't (re)initialise this pipeline: there are no
+            // originals to wrap, and wrapping our own hooks would recurse.
+            tracing::warn!("graphics pipeline not set up by FreeRDP's GDI; software");
+            return;
+        }
         let orig = Orig {
             surface_command: g.SurfaceCommand,
             solid_fill: g.SolidFill,
@@ -236,15 +299,16 @@ pub(crate) unsafe fn attach(state: &State, gfx: *mut ffi::RdpgfxClientContext) {
         g.MapSurfaceToWindow = Some(map_window);
         g.MapSurfaceToScaledWindow = Some(map_scaled_window);
         g.EndFrame = Some(end_frame);
-        *state.video.hooks.lock().unwrap_or_else(|e| e.into_inner()) = Some(Hooks {
-            orig,
-            verify: state.config.video_decode == VideoDecode::Verify,
-            all_software: false,
-            surfaces: HashMap::new(),
-            removed: Vec::new(),
-            stats: Stats::default(),
-        });
-    }
+        orig
+    };
+    *hooks = Some(Hooks {
+        orig,
+        verify: state.config.video_decode == VideoDecode::Verify,
+        all_software: false,
+        surfaces: HashMap::new(),
+        removed: Vec::new(),
+        stats: Stats::default(),
+    });
     tracing::info!("graphics pipeline: H.264 decoded on the GPU (zero-copy)");
 }
 
@@ -252,11 +316,15 @@ pub(crate) fn hw_available() -> bool {
     crate::hwdec::available()
 }
 
-/// The graphics channel closed: drop decoders and layers.
+/// The graphics channel closed: drop decoders and layers. FreeRDP has already deleted
+/// the surfaces through our `delete_surface` (its OnClose runs before
+/// ChannelDisconnected), so the renderer is told to drop every layer here: no paint
+/// would deliver those removals once the hooks are gone.
 pub(crate) fn detach(state: &State) {
     let mut g = state.video.hooks.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(h) = g.take() {
         h.log_stats();
+        state.emit(EngineEvent::VideoReset);
     }
 }
 
@@ -303,6 +371,32 @@ fn clip(r: Rect, w: u32, h: u32) -> Option<Rect> {
     let x2 = r.x.saturating_add(r.width).min(w);
     let y2 = r.y.saturating_add(r.height).min(h);
     (r.x < x2 && r.y < y2).then(|| Rect::new(r.x, r.y, x2 - r.x, y2 - r.y))
+}
+
+/// Add `r` to a surface's invalid region as FreeRDP's GDI does
+/// (`gdi_surface_invalidate_rect`): past [`MAX_INVALID_RECTS`] rectangles the region
+/// becomes its bounding box, so a union never works on more than that many however
+/// many rectangles a command brings.
+///
+/// # Safety
+/// `region` must be a valid, initialised REGION16 that nothing else is using.
+unsafe fn invalidate(region: *mut ffi::REGION16, r: &ffi::RECTANGLE_16) {
+    // SAFETY: per the contract. `region16_extents` points into `region` (never null
+    // for a valid one); the extents are copied before the region is cleared.
+    unsafe {
+        if ffi::region16_union_rect(region, region, r) == 0
+            || ffi::region16_n_rects(region) as usize <= MAX_INVALID_RECTS
+        {
+            return;
+        }
+        let extents = ffi::region16_extents(region);
+        if extents.is_null() {
+            return;
+        }
+        let extents = *extents;
+        ffi::region16_clear(region);
+        ffi::region16_union_rect(region, region, &extents);
+    }
 }
 
 fn rect16(r: &ffi::RECTANGLE_16) -> Rect {
@@ -390,8 +484,7 @@ impl Hooks {
                     right: (r.x + r.width) as u16,
                     bottom: (r.y + r.height) as u16,
                 };
-                let inv = &mut surf.invalidRegion as *mut ffi::REGION16;
-                ffi::region16_union_rect(inv, inv, &r16);
+                invalidate(&mut surf.invalidRegion, &r16);
                 s.region.subtract_rect(r);
                 self.stats.readback_px += r.width as u64 * r.height as u64;
             }
@@ -567,8 +660,10 @@ unsafe extern "C" fn surface_command(
                 bs.meta.numRegionRects as usize
             };
             let (sw, sh) = h.surfaces.get(&id).map_or((0, 0), |s| s.size);
+            // FreeRDP bounds the count only by the PDU's length.
+            let too_many = n > MAX_REGION_RECTS;
             // Clipped to the surface: FreeRDP checks only that each is well formed.
-            let rects: Vec<Rect> = if n == 0 {
+            let rects: Vec<Rect> = if n == 0 || too_many {
                 Vec::new()
             } else {
                 std::slice::from_raw_parts(bs.meta.regionRects, n)
@@ -603,7 +698,7 @@ unsafe extern "C" fn surface_command(
                     let frame = Arc::new(frame);
                     s.frame = Some(frame.clone());
                     s.nv12 = None;
-                    if rects.len() > MAX_COMMAND_RECTS {
+                    if too_many || rects.len() > MAX_COMMAND_RECTS {
                         // Too many to track: this frame goes to the framebuffer, as
                         // FreeRDP's decoder would put it (the earlier region from the
                         // same frame first, then the command's rectangles).
@@ -616,13 +711,14 @@ unsafe extern "C" fn surface_command(
                         // Converting each rectangle repeats the work where they
                         // overlap (FreeRDP accepts any number of copies of the whole
                         // surface). An encoder's rectangles don't overlap much: past
-                        // twice the surface, skip this frame's pixels instead (the
-                        // decoder keeps its state; nothing outside the mask is drawn).
+                        // twice the surface, or past MAX_REGION_RECTS rectangles, skip
+                        // this frame's pixels instead (the decoder keeps its state;
+                        // nothing outside the mask is drawn).
                         let area: u64 = rects
                             .iter()
                             .map(|r| u64::from(r.width) * u64::from(r.height))
                             .sum();
-                        if area <= 2 * u64::from(sw) * u64::from(sh) {
+                        if !too_many && area <= 2 * u64::from(sw) * u64::from(sh) {
                             h.read_back(gfx, id, &rects);
                         } else {
                             tracing::debug!(
@@ -944,8 +1040,10 @@ unsafe extern "C" fn map_output(
         let Some((_, o)) = with_hooks(gfx, |_| ()) else {
             return OK;
         };
-        // FreeRDP validates the mapping (surface exists, origin within the output);
-        // record it only once it's accepted.
+        // FreeRDP checks that the surface exists and isn't mapped to a window, and that
+        // the origin is at most 32766, not that the surface lies within the desktop
+        // (the renderer clips each layer to it). Record the mapping only once FreeRDP
+        // has accepted it.
         let rc = call!(o, map_output, gfx, pdu);
         if rc == OK {
             with_hooks(gfx, |h| {
@@ -1026,14 +1124,40 @@ unsafe extern "C" fn end_frame(
         };
         let rc = call!(o, end_frame, gfx, pdu);
         if let Some(st) = state_of(gfx) {
-            let video = st.video.take_updates();
-            if !video.is_empty() {
-                st.emit(EngineEvent::FrameUpdate {
-                    damage: Vec::new(),
-                    video,
-                });
-            }
+            st.video.emit_frame(st, Vec::new());
         }
         rc
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn invalidate_keeps_the_region_small() {
+        let mut region = std::mem::MaybeUninit::<ffi::REGION16>::uninit();
+        let r = region.as_mut_ptr();
+        // SAFETY: region16_init initialises the region, which only this test uses;
+        // region16_uninit frees it. region16_extents points into it.
+        unsafe {
+            ffi::region16_init(r);
+            // 100 000 separate 1×1 rectangles (every other pixel of every other row):
+            // unbounded, each union would cost more than the one before.
+            for i in 0..100_000u32 {
+                let (x, y) = ((i % 500) as u16 * 2, (i / 500) as u16 * 2);
+                let px = ffi::RECTANGLE_16 {
+                    left: x,
+                    top: y,
+                    right: x + 1,
+                    bottom: y + 1,
+                };
+                invalidate(r, &px);
+                assert!(ffi::region16_n_rects(r) as usize <= MAX_INVALID_RECTS);
+            }
+            let e = *ffi::region16_extents(r);
+            assert_eq!((e.left, e.top, e.right, e.bottom), (0, 0, 999, 399));
+            ffi::region16_uninit(r);
+        }
     }
 }

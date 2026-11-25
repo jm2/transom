@@ -322,6 +322,7 @@ fn main() -> ExitCode {
             Ok(EngineEvent::ResizeAvailable) => eprintln!("display control available"),
             Ok(EngineEvent::Pointer(_))
             | Ok(EngineEvent::PointerPosition { .. })
+            | Ok(EngineEvent::VideoReset)
             | Ok(EngineEvent::ClipboardRemoteFormats(_))
             | Ok(EngineEvent::ClipboardRemoteData { .. }) => {}
             Ok(EngineEvent::ClipboardDataRequest(_))

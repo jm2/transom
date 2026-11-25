@@ -156,6 +156,9 @@ pub(crate) struct State {
     pub(crate) config: SessionConfig,
     /// Zero-copy H.264 state (ADR 0006).
     pub(crate) video: crate::gfxvideo::Video,
+    /// Why the session was ended over a server request it refused (see `refuse`):
+    /// the disconnect reason, as a protocol error.
+    refused: Mutex<Option<String>>,
     /// Kerberos: whether the ticket cache was already tried for the server / gateway.
     kerberos_tried: [AtomicBool; 2],
     cert_rejected: AtomicBool,
@@ -291,6 +294,7 @@ fn run(
         waker: waker.clone(),
         config,
         video: Default::default(),
+        refused: Mutex::new(None),
         kerberos_tried: [AtomicBool::new(false), AtomicBool::new(false)],
         cert_rejected: AtomicBool::new(false),
         auth_cancelled: AtomicBool::new(false),
@@ -550,6 +554,14 @@ unsafe fn classify_error(ctx: *mut ffi::rdpContext, state: &State) -> Disconnect
     }
     if state.auth_cancelled.load(Ordering::SeqCst) {
         return DisconnectReason::Local;
+    }
+    if let Some(why) = state
+        .refused
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+    {
+        return DisconnectReason::Protocol(why);
     }
     // SAFETY: valid context; the returned strings are static.
     let (code, name, text) = unsafe {
@@ -949,6 +961,15 @@ unsafe extern "C" fn post_connect(instance: *mut ffi::freerdp) -> ffi::BOOL {
         let Some(state) = state(ctx) else {
             return FALSE;
         };
+        // The server chose the size (Demand Active); gdi_init allocates it.
+        let s = (*ctx).settings;
+        let requested = Size::new(
+            ffi::freerdp_settings_get_uint32(s, ffi::FreeRDP_DesktopWidth),
+            ffi::freerdp_settings_get_uint32(s, ffi::FreeRDP_DesktopHeight),
+        );
+        if !refuse_oversized(ctx, state, requested) {
+            return FALSE;
+        }
         if ffi::gdi_init(instance, PIXEL_FORMAT_BGRX32) == 0 {
             return FALSE;
         }
@@ -972,10 +993,15 @@ unsafe extern "C" fn post_connect(instance: *mut ffi::freerdp) -> ffi::BOOL {
         let gdi = (*ctx).gdi;
         let size = Size::new((*gdi).width as u32, (*gdi).height as u32);
         // Black, like the primary buffer (clear_primary): nothing is drawn yet.
-        let frame = SharedFrame::new(size);
+        let frame = match SharedFrame::try_new(size) {
+            Ok(f) => f,
+            Err(e) => {
+                refuse(ctx, state, e.to_string());
+                return FALSE;
+            }
+        };
         *state.frame.lock().unwrap_or_else(|e| e.into_inner()) = Some(frame.clone());
 
-        let s = (*ctx).settings;
         let scale = ScaleFactors {
             desktop: ffi::freerdp_settings_get_uint32(s, ffi::FreeRDP_DesktopScaleFactor),
             device: ffi::freerdp_settings_get_uint32(s, ffi::FreeRDP_DeviceScaleFactor),
@@ -1026,7 +1052,10 @@ unsafe extern "C" fn on_channel_connected(
                     ffi::FreeRDP_ServerHostname,
                 ));
                 tracing::info!(%target, "channels reconnected after redirection");
-                state.emit(EngineEvent::Redirecting { target });
+                // The view drops its video layers on this; current ones are re-sent.
+                state
+                    .video
+                    .emit_reset(state, EngineEvent::Redirecting { target });
             }
             let disp = (*e).pInterface as *mut ffi::DispClientContext;
             (*disp).custom = ctx.cast();
@@ -1389,11 +1418,23 @@ unsafe extern "C" fn verify_changed_certificate_ex(
 
 // ---- painting ----------------------------------------------------------------------
 
+/// The primary surface's window, which holds its invalid region; null if GDI has no
+/// primary surface (a failed `gdi_resize` leaves `primary` NULL).
+///
 /// # Safety
-/// `gdi` must be valid with an initialised primary surface.
+/// `gdi` must be null or valid.
 unsafe fn primary_hwnd(gdi: *mut ffi::rdpGdi) -> *mut ffi::GDI_WND {
-    // SAFETY: per the contract.
-    unsafe { (*(*(*gdi).primary).hdc).hwnd }
+    // SAFETY: per the contract; each pointer is checked before it's followed.
+    unsafe {
+        if gdi.is_null() || (*gdi).primary.is_null() {
+            return ptr::null_mut();
+        }
+        let hdc = (*(*gdi).primary).hdc;
+        if hdc.is_null() {
+            return ptr::null_mut();
+        }
+        (*hdc).hwnd
+    }
 }
 
 /// Paint FreeRDP's primary buffer black. GDI starts it, and every resized one, white
@@ -1424,8 +1465,8 @@ unsafe fn copy_rects(gdi: *mut ffi::rdpGdi, frame: &SharedFrame, rects: &[Rect])
             return;
         }
         let mut f = frame.lock();
-        if f.size != size {
-            f.resize(size);
+        if f.size != size && f.try_resize(size).is_err() {
+            return;
         }
         let dst_stride = f.stride;
         for r in rects.iter().filter_map(|r| r.clip(size)) {
@@ -1441,9 +1482,13 @@ unsafe fn copy_rects(gdi: *mut ffi::rdpGdi, frame: &SharedFrame, rects: &[Rect])
 }
 
 unsafe extern "C" fn begin_paint(ctx: *mut ffi::rdpContext) -> ffi::BOOL {
-    // SAFETY: valid context with an initialised GDI.
+    // SAFETY: valid context; `primary_hwnd` returns null rather than follow a missing
+    // primary surface, and the window's region is checked before it's written.
     unsafe {
         let hwnd = primary_hwnd((*ctx).gdi);
+        if hwnd.is_null() || (*hwnd).invalid.is_null() {
+            return FALSE; // nothing to paint into
+        }
         (*(*hwnd).invalid).null = TRUE;
         (*hwnd).ninvalid = 0;
     }
@@ -1451,26 +1496,43 @@ unsafe extern "C" fn begin_paint(ctx: *mut ffi::rdpContext) -> ffi::BOOL {
 }
 
 unsafe extern "C" fn end_paint(ctx: *mut ffi::rdpContext) -> ffi::BOOL {
-    // SAFETY: valid context with an initialised GDI; may run on a channel thread,
-    // which FreeRDP serialises against other paints.
+    // SAFETY: valid context; the primary surface and its window are checked as in
+    // begin_paint. `cinvalid` holds `ninvalid` regions (FreeRDP grows the array
+    // before it adds one). May run on a channel thread, which FreeRDP serialises
+    // against other paints.
     unsafe {
         let Some(state) = state(ctx) else { return TRUE };
         let gdi = (*ctx).gdi;
         let hwnd = primary_hwnd(gdi);
+        if hwnd.is_null() || (*hwnd).invalid.is_null() {
+            return FALSE;
+        }
         let inv = (*hwnd).invalid;
         if (*inv).null != 0 {
             return TRUE;
         }
+        // Negative edges are cut off at 0 (copy_rects clips the rest).
         let to_rect = |g: &ffi::GDI_RGN| {
-            (g.w > 0 && g.h > 0 && g.x >= 0 && g.y >= 0)
-                .then(|| Rect::new(g.x as u32, g.y as u32, g.w as u32, g.h as u32))
+            let (x0, y0) = (i64::from(g.x.max(0)), i64::from(g.y.max(0)));
+            let x1 = i64::from(g.x) + i64::from(g.w);
+            let y1 = i64::from(g.y) + i64::from(g.h);
+            (x1 > x0 && y1 > y0)
+                .then(|| Rect::new(x0 as u32, y0 as u32, (x1 - x0) as u32, (y1 - y0) as u32))
         };
+        // FreeRDP adds a region per drawing operation, overlaps and all, and keeps
+        // their bounding rectangle in `invalid`: past MAX_DAMAGE_RECTS (or when they
+        // overlap more than that rectangle holds) copy that rectangle instead.
         let n = (*hwnd).ninvalid.max(0) as usize;
-        let mut damage: Vec<Rect> = if n > 0 && !(*hwnd).cinvalid.is_null() {
-            std::slice::from_raw_parts((*hwnd).cinvalid, n)
-                .iter()
-                .filter_map(to_rect)
-                .collect()
+        let mut damage: Vec<Rect> = if n > 0
+            && n <= transom_view_core::engine::MAX_DAMAGE_RECTS
+            && !(*hwnd).cinvalid.is_null()
+        {
+            transom_view_core::engine::coalesce_damage(
+                std::slice::from_raw_parts((*hwnd).cinvalid, n)
+                    .iter()
+                    .filter_map(to_rect)
+                    .collect(),
+            )
         } else {
             Vec::new()
         };
@@ -1487,17 +1549,51 @@ unsafe extern "C" fn end_paint(ctx: *mut ffi::rdpContext) -> ffi::BOOL {
             .clone();
         if let (Some(frame), false) = (frame, damage.is_empty()) {
             copy_rects(gdi, &frame, &damage);
-            state.emit(EngineEvent::FrameUpdate {
-                damage,
-                video: state.video.take_updates(),
-            });
+            state.video.emit_frame(state, damage);
         }
     }
     TRUE
 }
 
+/// End the session over a server request that is refused rather than carried out;
+/// `why` becomes the disconnect reason (a protocol error).
+///
+/// # Safety
+/// `ctx` must be the valid context whose state is `state`.
+unsafe fn refuse(ctx: *mut ffi::rdpContext, state: &State, why: String) {
+    tracing::error!("{why}");
+    state
+        .refused
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get_or_insert(why);
+    // SAFETY: valid context, per the contract; FreeRDP allows this from any thread.
+    unsafe { ffi::freerdp_abort_connect_context(ctx) };
+}
+
+/// Whether the server's desktop size is acceptable; if not, the session is ended
+/// (`refuse`) before anything of that size is allocated.
+///
+/// # Safety
+/// As for [`refuse`].
+unsafe fn refuse_oversized(ctx: *mut ffi::rdpContext, state: &State, size: Size) -> bool {
+    if transom_view_core::geometry::remote_desktop_size_ok(size) {
+        return true;
+    }
+    let why = format!(
+        "the server chose a {}×{} desktop, more than Transom supports",
+        size.width, size.height
+    );
+    // SAFETY: forwarded contract.
+    unsafe { refuse(ctx, state, why) };
+    false
+}
+
 unsafe extern "C" fn desktop_resize(ctx: *mut ffi::rdpContext) -> ffi::BOOL {
-    // SAFETY: valid context with an initialised GDI.
+    // SAFETY: valid context with an initialised GDI. An oversized desktop is refused
+    // before gdi_resize, so GDI keeps its old primary surface; if gdi_resize fails
+    // anyway it leaves none, and the session is ended (FreeRDP would otherwise go on
+    // drawing into it).
     unsafe {
         let Some(state) = state(ctx) else {
             return FALSE;
@@ -1505,8 +1601,17 @@ unsafe extern "C" fn desktop_resize(ctx: *mut ffi::rdpContext) -> ffi::BOOL {
         let s = (*ctx).settings;
         let w = ffi::freerdp_settings_get_uint32(s, ffi::FreeRDP_DesktopWidth);
         let h = ffi::freerdp_settings_get_uint32(s, ffi::FreeRDP_DesktopHeight);
+        let size = Size::new(w, h);
+        if !refuse_oversized(ctx, state, size) {
+            return FALSE;
+        }
         let gdi = (*ctx).gdi;
-        if ffi::gdi_resize(gdi, w, h) == 0 {
+        if gdi.is_null() || ffi::gdi_resize(gdi, w, h) == 0 {
+            refuse(
+                ctx,
+                state,
+                format!("couldn't resize the desktop to {w}×{h}"),
+            );
             return FALSE;
         }
         clear_primary(gdi);
@@ -1517,11 +1622,14 @@ unsafe extern "C" fn desktop_resize(ctx: *mut ffi::rdpContext) -> ffi::BOOL {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone();
-        if let Some(frame) = frame {
-            frame.lock().resize_keeping(Size::new(w, h));
+        if let Some(frame) = frame
+            && let Err(e) = frame.lock().try_resize_keeping(size)
+        {
+            refuse(ctx, state, e.to_string());
+            return FALSE;
         }
         tracing::info!(w, h, "desktop resized");
-        state.emit(EngineEvent::DesktopResized(Size::new(w, h)));
+        state.emit(EngineEvent::DesktopResized(size));
     }
     TRUE
 }

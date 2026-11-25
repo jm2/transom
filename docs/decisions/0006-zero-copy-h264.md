@@ -41,12 +41,17 @@ latest video frame, not system memory, holds the current pixels.
   need back into the surface. The copy-back is converted exactly like FreeRDP's
   integer BT.709 full-range decoder.
 - **Delivery:** video layer changes ride on `EngineEvent::FrameUpdate`, so a frame's
-  framebuffer damage and video change arrive together.
+  framebuffer damage and video change arrive together. When a graphics channel closes
+  or opens, `EngineEvent::VideoReset` makes the view drop every layer: the surfaces
+  they belonged to are gone. A server redirection does the same, and the engine then
+  sends the layers that are still current again.
 - **Scope:** only output-mapped, unscaled surfaces become layers. Scaled outputs and
   RemoteApp windows copy back and stay in software.
 
 **Rendering:** the view draws, per surface, the whole frame texture clipped to each
-rectangle of its region, over the tiles. It uses the same device-pixel rounding as the
+rectangle of its region, over the tiles. Each rectangle is also clipped to the desktop
+(or to the part of it a view shows), since the server's surface origin is checked only
+against FreeRDP's 32766-pixel limit. It uses the same device-pixel rounding as the
 tiles. The colour state is CICP BT.709 / sRGB transfer / full range: MS-RDPEGFX's
 YCbCr.
 - **Renderer:** only GTK's Vulkan renderer is used for this. It imports VA-API's tiled

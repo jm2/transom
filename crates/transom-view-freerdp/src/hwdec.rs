@@ -174,14 +174,20 @@ impl H264Decoder {
     pub(crate) fn decode(&mut self, data: &[u8]) -> Result<Option<HwFrame>, String> {
         // libavcodec's bitstream readers need zeroed padding after the data.
         let pad = av::AV_INPUT_BUFFER_PADDING_SIZE as usize;
+        // The packet size is a C int (the padding must fit after it too).
+        let size = match c_int::try_from(data.len()) {
+            Ok(n) if n <= c_int::MAX - pad as c_int => n,
+            _ => return Err(format!("{} byte access unit is too large", data.len())),
+        };
         self.buf.clear();
         self.buf.extend_from_slice(data);
         self.buf.resize(data.len() + pad, 0);
         // SAFETY: `pkt`/`frame` are owned and valid; the packet borrows `buf` only for
         // the duration of avcodec_send_packet (not refcounted, so libavcodec copies).
+        // `buf` holds `size` bytes of data and then the zeroed padding.
         unsafe {
             (*self.pkt).data = self.buf.as_mut_ptr();
-            (*self.pkt).size = data.len() as c_int;
+            (*self.pkt).size = size;
             let rc = av::avcodec_send_packet(self.ctx, self.pkt);
             (*self.pkt).data = ptr::null_mut();
             (*self.pkt).size = 0;
