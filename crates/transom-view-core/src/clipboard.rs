@@ -34,6 +34,9 @@ pub const FILES_FORMAT_NAME: &str = "FileGroupDescriptorW";
 pub const LOCAL_HTML_ID: u32 = 0xD010;
 pub const LOCAL_PNG_ID: u32 = 0xD011;
 pub const LOCAL_FILES_ID: u32 = 0xD012;
+/// Upper bound for any clipboard payload read locally or accepted from the remote
+/// (bytes). Remote data over it is dropped before it is copied.
+pub const MAX_CLIP_BYTES: usize = 64 * 1024 * 1024;
 
 impl ClipFormat {
     /// `(id, name)` to announce in a client format list.
