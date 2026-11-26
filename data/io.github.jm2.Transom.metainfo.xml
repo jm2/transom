@@ -48,6 +48,18 @@
     <mediatype>application/x-rdp</mediatype>
   </provides>
   <releases>
+    <release version="0.1.1" date="2026-11-25">
+      <description>
+        <p>A security release.</p>
+        <ul>
+          <li>Passwords are sent only with Network Level Authentication unless a connection is set to use TLS or legacy RDP security</li>
+          <li>The remote computer can read the clipboard only while its session has focus</li>
+          <li>Connections from files and links require Network Level Authentication and ask first, including links pasted into Quick Connect</li>
+          <li>The AppImage bundles FreeRDP 3.33.1; the other packages require it</li>
+          <li>Hardening against misbehaving servers: graphics, clipboard files, redirections and host names</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.1.0" date="2026-11-24">
       <description>
         <p>The first release.</p>

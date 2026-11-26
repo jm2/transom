@@ -3,10 +3,10 @@
 # The upstream version in SemVer spelling; Version is its RPM spelling (a prerelease
 # such as 0.2.0-alpha.1 becomes 0.2.0~alpha.1). scripts/release_check.py binds both to
 # the tag, and Packit rewrites Version the same way.
-%global upstream_version 0.1.0
+%global upstream_version 0.1.1
 
 Name:           transom
-Version:        0.1.0
+Version:        0.1.1
 Release:        1%{?dist}
 Summary:        Sharp remote desktops over RDP
 # App GPL-3.0-or-later; the bundled transom-view libraries Apache-2.0; vendored crates
@@ -85,6 +85,9 @@ cargo test --release --locked --offline -p transom-view-core
 %{_datadir}/icons/hicolor/*/apps/io.github.jm2.Transom.*
 
 %changelog
+* Wed Nov 25 2026 Transom Contributors - 0.1.1-1
+- Security release (see CHANGELOG.md)
+
 * Tue Nov 24 2026 Transom Contributors - 0.1.0-1
 - First release
 

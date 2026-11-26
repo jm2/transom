@@ -924,7 +924,10 @@ unsafe extern "C" fn redirect(instance: *mut ffi::freerdp) -> ffi::BOOL {
             return FALSE;
         }
         tracing::info!(%target, "server redirection");
-        state.emit(EngineEvent::Redirecting { target });
+        // The view drops its video layers on this (the channels are closed by now).
+        state
+            .video
+            .emit_reset(state, EngineEvent::Redirecting { target });
         TRUE
     }
 }

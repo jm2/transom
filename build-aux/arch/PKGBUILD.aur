@@ -5,7 +5,7 @@
 # (build-aux/arch/PKGBUILD builds the local checkout from scripts/dist.sh instead.)
 # Maintainer: John-Michael Mulesa <jmulesa@gmail.com>
 pkgname=transom
-pkgver=0.1.0
+pkgver=0.1.1
 pkgrel=1
 pkgdesc="Sharp remote desktops over RDP (GTK 4, HiDPI-correct)"
 arch=('x86_64' 'aarch64')
