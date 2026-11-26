@@ -50,6 +50,21 @@ pub fn from_hardware_keycode(keycode: u32) -> Option<Scancode> {
     }
 }
 
+/// Left/Right Win (Super, ⌘ on a Mac) become Left/Right Ctrl; other keys pass through.
+pub fn command_as_ctrl(sc: Scancode) -> Scancode {
+    match (sc.code, sc.extended) {
+        (0x5B, true) => Scancode {
+            code: 0x1D,
+            extended: false,
+        },
+        (0x5C, true) => Scancode {
+            code: 0x1D,
+            extended: true,
+        },
+        _ => sc,
+    }
+}
+
 /// XKB keycode (evdev + 8), as reported by GDK on Wayland and X11.
 pub fn from_xkb(keycode: u32) -> Option<Scancode> {
     keycode.checked_sub(8).and_then(from_evdev)
@@ -329,6 +344,14 @@ mod tests {
         }
         assert_eq!(us_ascii('q').unwrap().0, from_evdev(16).unwrap());
         assert_eq!(us_ascii('m').unwrap().0, from_evdev(50).unwrap());
+    }
+
+    #[test]
+    fn command_as_ctrl_maps_only_win_keys() {
+        assert_eq!(command_as_ctrl(e(0x5B).unwrap()), s(0x1D).unwrap()); // ⌘ -> LCtrl
+        assert_eq!(command_as_ctrl(e(0x5C).unwrap()), e(0x1D).unwrap()); // right ⌘ -> RCtrl
+        assert_eq!(command_as_ctrl(s(0x1E).unwrap()), s(0x1E).unwrap()); // A unchanged
+        assert_eq!(command_as_ctrl(s(0x5B).unwrap()), s(0x5B).unwrap()); // not extended
     }
 
     #[test]

@@ -20,16 +20,44 @@ use crate::window::MainWindow;
 /// Application ID (PLAN §10.1: proposed, not final; change it here only).
 pub const APP_ID: &str = "io.github.jm2.Transom";
 
-/// App shortcuts, disabled while a remote session has keyboard focus.
+/// App shortcuts: ⌘ on macOS (`<Meta>`; GTK's `<Primary>` means Ctrl there too),
+/// Ctrl elsewhere.
+///
+/// Elsewhere they are disabled while a remote session has keyboard focus, because
+/// Ctrl+Q, Ctrl+N… are common there. On macOS they stay local
+/// ([`SHORTCUTS_STAY_LOCAL`]): ⌘ is the Mac's own modifier and Ctrl still reaches the
+/// remote, so the two don't collide.
 pub fn app_shortcuts() -> &'static [(&'static str, &'static [&'static str])] {
-    &[
-        ("app.quit", &["<Control>q"]),
-        ("app.new-window", &["<Control><Shift>n"]),
-        ("win.new-connection", &["<Control>n"]),
-        ("win.import", &["<Control>o"]),
-        ("win.search", &["<Control>f"]),
-    ]
+    #[cfg(target_os = "macos")]
+    {
+        &[
+            ("app.quit", &["<Meta>q"]),
+            ("app.new-window", &["<Meta><Shift>n"]),
+            ("win.new-connection", &["<Meta>n"]),
+            ("win.import", &["<Meta>o"]),
+            ("win.search", &["<Meta>f"]),
+            // Mac equivalents of the Ctrl+Alt session chords (window.rs), which need
+            // keys most Mac keyboards lack (Home, End, Break) and clash with
+            // VoiceOver's own Ctrl+Option.
+            ("win.fullscreen", &["<Meta><Control>f"]),
+            ("win.send-cad", &["<Meta><Alt>BackSpace"]),
+            ("win.focus-chrome", &["<Meta>Escape"]),
+        ]
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        &[
+            ("app.quit", &["<Control>q"]),
+            ("app.new-window", &["<Control><Shift>n"]),
+            ("win.new-connection", &["<Control>n"]),
+            ("win.import", &["<Control>o"]),
+            ("win.search", &["<Control>f"]),
+        ]
+    }
 }
+
+/// Whether [`app_shortcuts`] keep working while a session has keyboard focus.
+pub const SHORTCUTS_STAY_LOCAL: bool = cfg!(target_os = "macos");
 
 /// State shared by all windows.
 pub struct AppState {
@@ -44,6 +72,8 @@ pub struct AppState {
     last_secret_op: RefCell<Option<glib::JoinHandle<()>>>,
     /// Keyring changes queued and not finished yet; `shutdown` waits for them.
     pending_secret_ops: Rc<Cell<usize>>,
+    /// Send ⌘ to the remote as Ctrl (`app.command-as-ctrl`, macOS only).
+    pub command_as_ctrl: Cell<bool>,
 }
 
 impl std::fmt::Debug for AppState {
@@ -100,6 +130,7 @@ impl AppState {
             windows: RefCell::new(Vec::new()),
             last_secret_op: RefCell::new(None),
             pending_secret_ops: Rc::new(Cell::new(0)),
+            command_as_ctrl: Cell::new(cfg!(target_os = "macos")),
         }
     }
 
@@ -422,6 +453,27 @@ fn setup_app_actions(app: &adw::Application, state: &Rc<AppState>) {
         }
     ));
     app.add_action(&about);
+
+    // macOS: ⌘C, ⌘V… reach the remote as Ctrl+C, Ctrl+V (default), or as Win+C…
+    if cfg!(target_os = "macos") {
+        let action = gio::SimpleAction::new_stateful(
+            "command-as-ctrl",
+            None,
+            &state.command_as_ctrl.get().to_variant(),
+        );
+        let st = Rc::downgrade(state);
+        action.connect_activate(move |a, _| {
+            let on = !a.state().and_then(|v| v.get::<bool>()).unwrap_or(true);
+            a.set_state(&on.to_variant());
+            if let Some(s) = st.upgrade() {
+                s.command_as_ctrl.set(on);
+                for session in s.sessions.borrow().iter() {
+                    session.set_command_as_ctrl(on);
+                }
+            }
+        });
+        app.add_action(&action);
+    }
 
     for (action, accels) in app_shortcuts() {
         app.set_accels_for_action(action, accels);

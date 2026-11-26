@@ -94,6 +94,8 @@ mod imp {
         pub wheel: WheelAccumulator,
         pub hwheel: WheelAccumulator,
         pub pressed_keys: HashSet<Scancode>,
+        /// Send the Super/Command keys as Ctrl (for Mac users' ⌘C, ⌘V…).
+        pub command_as_ctrl: bool,
         pub pressed_buttons: HashSet<u32>,
         pub pointer: Point,
         pub scale_watch: Option<(gdk::Surface, glib::SignalHandlerId)>,
@@ -964,6 +966,11 @@ mod imp {
                 return glib::Propagation::Proceed;
             }
             if let Some(sc) = keymap::from_hardware_keycode(keycode) {
+                let sc = if self.inner.borrow().command_as_ctrl {
+                    keymap::command_as_ctrl(sc)
+                } else {
+                    sc
+                };
                 {
                     let mut inner = self.inner.borrow_mut();
                     if down {
@@ -1277,6 +1284,17 @@ impl TransomView {
     /// follower. Without it, only what GDK reports is used.
     pub fn set_platform_clipboard(&self, f: impl Fn() -> PlatformClipboard + 'static) {
         self.imp().clipboard.set_probe(std::rc::Rc::new(f));
+    }
+
+    /// Send the Super/Command keys to the remote as Ctrl, so a Mac user's ⌘C and
+    /// ⌘V copy and paste there instead of pressing Win+C, Win+V. Off by default.
+    pub fn set_command_as_ctrl(&self, on: bool) {
+        let imp = self.imp();
+        if imp.inner.borrow().command_as_ctrl != on {
+            // A key held across the switch would be released under the other code.
+            imp.release_all();
+            imp.inner.borrow_mut().command_as_ctrl = on;
+        }
     }
 
     pub fn send_ctrl_alt_del(&self) {
