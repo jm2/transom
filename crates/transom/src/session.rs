@@ -64,6 +64,17 @@ impl Session {
         ))]);
         view.set_hexpand(true);
         view.set_vexpand(true);
+        // GDK on macOS sees neither password managers' concealed markers nor every
+        // pasteboard change: the clipboard bridge asks the pasteboard itself.
+        #[cfg(target_os = "macos")]
+        view.set_platform_clipboard(|| {
+            transom_macos::pasteboard()
+                .map(|p| transom_view::PlatformClipboard {
+                    concealed: p.concealed,
+                    change_count: Some(p.change_count),
+                })
+                .unwrap_or_default()
+        });
         let root = gtk::Overlay::new();
         root.set_child(Some(&view));
         let overlay = adw::Bin::new();

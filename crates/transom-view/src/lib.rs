@@ -17,5 +17,6 @@ mod dmabuf;
 mod tiles;
 mod view;
 
+pub use clipboard::PlatformClipboard;
 pub use transom_view_core as core;
 pub use view::TransomView;

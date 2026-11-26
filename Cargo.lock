@@ -1529,6 +1529,8 @@ version = "0.1.0"
 dependencies = [
  "async-channel",
  "gtk4",
+ "libc",
+ "rustix",
  "sha2",
  "tracing",
  "tracing-subscriber",
