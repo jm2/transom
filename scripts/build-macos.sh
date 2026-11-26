@@ -112,6 +112,7 @@ if (( BUNDLE )); then
     [[ -x $BREW/bin/gdk-pixbuf-query-loaders ]] || problem "gdk-pixbuf-query-loaders: brew install gdk-pixbuf"
     [[ -f $BREW/share/icons/Adwaita/index.theme ]] || problem "the Adwaita icon theme: brew install adwaita-icon-theme"
     check_cmd glib-compile-schemas "brew install glib"
+    check_cmd gtk4-update-icon-cache "brew install gtk4"
 fi
 (( DMG )) && check_cmd create-dmg "brew install create-dmg"
 (( CLIPPY )) && check_component clippy clippy
@@ -166,6 +167,13 @@ mkdir -p "$C/Resources/share/icons" "$C/Resources/share/glib-2.0/schemas"
 cp -RL "$BREW/share/icons/Adwaita" "$C/Resources/share/icons/"
 cp -RL "$BREW/share/icons/hicolor" "$C/Resources/share/icons/" 2>/dev/null || mkdir -p "$C/Resources/share/icons/hicolor"
 cp -R data/icons/hicolor/. "$C/Resources/share/icons/hicolor/"
+# Homebrew's hicolor icon-theme.cache predates Transom's icons, and GTK trusts a
+# cache over the directory, so the app icon (About dialog) came up missing.
+# Rebuild the caches for what the bundle actually holds.
+for theme in hicolor Adwaita; do
+    gtk4-update-icon-cache -q -f -t "$C/Resources/share/icons/$theme" ||
+        fail "gtk4-update-icon-cache failed for $theme"
+done
 cp "$BREW"/share/glib-2.0/schemas/*.xml "$C/Resources/share/glib-2.0/schemas/"
 glib-compile-schemas "$C/Resources/share/glib-2.0/schemas"
 cp -RL "$BREW/lib/gdk-pixbuf-2.0" "$C/Resources/lib/"
