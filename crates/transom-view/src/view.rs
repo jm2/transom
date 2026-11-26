@@ -23,6 +23,7 @@ use transom_view_core::keymap::{self, Scancode};
 use transom_view_core::monitors::RemoteMonitor;
 use transom_view_core::secrecy::SecretString;
 
+use crate::clipboard::PlatformClipboard;
 use crate::tiles::TileCache;
 
 /// Debounce for resize and scale changes before a new monitor layout is sent (§3.8).
@@ -130,6 +131,13 @@ mod imp {
             obj.set_overflow(gtk::Overflow::Hidden);
             obj.update_property(&[gtk::accessible::Property::Label("Remote desktop")]);
             self.setup_input();
+            // The clipboard bridge lives on the view that owns the session, and the
+            // session has focus while any of its views has (multi-monitor: the user
+            // may be working in a follower's window).
+            obj.connect_has_focus_notify(|v| {
+                let src = v.imp().source();
+                src.imp().clipboard.focus_changed(&src);
+            });
         }
 
         fn signals() -> &'static [Signal] {
@@ -1247,6 +1255,28 @@ impl TransomView {
     /// Queue a raw engine command (crate-internal: clipboard bridge).
     pub(crate) fn send_command(&self, cmd: EngineCommand) {
         self.imp().send(cmd);
+    }
+
+    /// Whether this view or one of its followers has keyboard focus (crate-internal:
+    /// clipboard bridge).
+    pub(crate) fn session_has_focus(&self) -> bool {
+        self.has_focus()
+            || self
+                .imp()
+                .followers
+                .borrow()
+                .iter()
+                .any(|w| w.upgrade().is_some_and(|v| v.has_focus()))
+    }
+
+    /// Tell the clipboard bridge what the system clipboard reports that GDK can't
+    /// see: on macOS, whether a password manager marked the content as concealed,
+    /// and the pasteboard's change count (see [`PlatformClipboard`]). `f` runs on
+    /// the main thread whenever the clipboard changes, focus returns, or the remote
+    /// asks for the clipboard. Set it on the view that owns the session, not on a
+    /// follower. Without it, only what GDK reports is used.
+    pub fn set_platform_clipboard(&self, f: impl Fn() -> PlatformClipboard + 'static) {
+        self.imp().clipboard.set_probe(std::rc::Rc::new(f));
     }
 
     pub fn send_ctrl_alt_del(&self) {

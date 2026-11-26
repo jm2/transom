@@ -19,7 +19,8 @@
 //!   --video-decode M      auto | software | verify (ADR 0006)
 //!   --quit-after-ms N     disconnect cleanly and quit N ms after connecting
 //!   --multimon            one fullscreen window per monitor (multi-monitor layout);
-//!                         with --check, every monitor's window is checked
+//!                         with --check, every monitor's window is checked; with
+//!                         --clip-test, the session shares the clipboard
 //!   --file-clip-test      copy local test files 6 s after connecting and print
 //!                         SHA-256 of files arriving on the local clipboard
 //!   --clip-test           put test text on the local clipboard 6 s after connecting
@@ -343,46 +344,7 @@ fn build(app: &gtk::Application, args: Args, code: Rc<Cell<u8>>) {
         install_file_clip_test(&view);
     }
     if args.clip_test {
-        let cb = view.clipboard();
-        cb.connect_changed(|cb| {
-            let formats = cb.formats().to_str().to_string();
-            cb.read_text_async(gtk::gio::Cancellable::NONE, move |r| {
-                if let Ok(Some(t)) = r {
-                    println!("LOCAL CLIPBOARD TEXT: {t:?} [{formats}]");
-                }
-            });
-            if cb.formats().contains_type(gdk::Texture::static_type()) {
-                cb.read_texture_async(gtk::gio::Cancellable::NONE, |r| {
-                    if let Ok(Some(t)) = r {
-                        println!("LOCAL CLIPBOARD IMAGE: {}x{}", t.width(), t.height());
-                    }
-                });
-            }
-        });
-        view.connect_connected(|v| {
-            let v2 = v.clone();
-            glib::timeout_add_local_once(Duration::from_secs(6), move || {
-                v2.clipboard().set_text("from the local side ✓");
-                println!("set local clipboard");
-            });
-            let v3 = v.clone();
-            glib::timeout_add_local_once(Duration::from_secs(18), move || {
-                let rgba: Vec<u8> = (0..30u32)
-                    .flat_map(|y| {
-                        (0..40u32).flat_map(move |x| [(x * 6) as u8, (y * 8) as u8, 60, 255])
-                    })
-                    .collect();
-                let tex = gdk::MemoryTexture::new(
-                    40,
-                    30,
-                    gdk::MemoryFormat::R8g8b8a8,
-                    &glib::Bytes::from_owned(rgba),
-                    160,
-                );
-                v3.clipboard().set_texture(&tex);
-                println!("set local clipboard image");
-            });
-        });
+        install_clip_test(&view);
     }
     if let Some(ms) = args.quit_after_ms {
         let app = app.clone();
@@ -815,6 +777,49 @@ fn run_check_region(
     exact
 }
 
+/// `--clip-test`: log every local clipboard change (text / image size), and put test
+/// text (6 s after connecting) and a test image (18 s) on the local clipboard.
+fn install_clip_test(view: &TransomView) {
+    let cb = view.clipboard();
+    cb.connect_changed(|cb| {
+        let formats = cb.formats().to_str().to_string();
+        cb.read_text_async(gtk::gio::Cancellable::NONE, move |r| {
+            if let Ok(Some(t)) = r {
+                println!("LOCAL CLIPBOARD TEXT: {t:?} [{formats}]");
+            }
+        });
+        if cb.formats().contains_type(gdk::Texture::static_type()) {
+            cb.read_texture_async(gtk::gio::Cancellable::NONE, |r| {
+                if let Ok(Some(t)) = r {
+                    println!("LOCAL CLIPBOARD IMAGE: {}x{}", t.width(), t.height());
+                }
+            });
+        }
+    });
+    view.connect_connected(|v| {
+        let v2 = v.clone();
+        glib::timeout_add_local_once(Duration::from_secs(6), move || {
+            v2.clipboard().set_text("from the local side ✓");
+            println!("set local clipboard");
+        });
+        let v3 = v.clone();
+        glib::timeout_add_local_once(Duration::from_secs(18), move || {
+            let rgba: Vec<u8> = (0..30u32)
+                .flat_map(|y| (0..40u32).flat_map(move |x| [(x * 6) as u8, (y * 8) as u8, 60, 255]))
+                .collect();
+            let tex = gdk::MemoryTexture::new(
+                40,
+                30,
+                gdk::MemoryFormat::R8g8b8a8,
+                &glib::Bytes::from_owned(rgba),
+                160,
+            );
+            v3.clipboard().set_texture(&tex);
+            println!("set local clipboard image");
+        });
+    });
+}
+
 /// `--file-clip-test`: copy local files, and hash files that arrive from the remote.
 fn install_file_clip_test(view: &TransomView) {
     use sha2::{Digest, Sha256};
@@ -975,7 +980,12 @@ fn build_multimon(app: &gtk::Application, args: Args, code: Rc<Cell<u8>>) {
         cert_policy: CertPolicy::Verify,
         scale_mode: args.scale_mode,
         fit_mode: args.fit,
-        clipboard: transom_view::core::config::ClipboardMode::Off,
+        // With --clip-test: pasting while a follower's window has focus.
+        clipboard: if args.clip_test {
+            transom_view::core::config::ClipboardMode::Both
+        } else {
+            transom_view::core::config::ClipboardMode::Off
+        },
         audio: transom_view::core::config::AudioMode::Off,
         microphone: false,
         kerberos: false,
@@ -986,6 +996,19 @@ fn build_multimon(app: &gtk::Application, args: Args, code: Rc<Cell<u8>>) {
         redirections: args.redirections.clone(),
     };
     leader.connect_desktop_resized(|_, w, h| eprintln!("desktop resized: {w}x{h}"));
+    if args.clip_test {
+        install_clip_test(&leader);
+    }
+    if let Some(ms) = args.quit_after_ms {
+        let app = app.clone();
+        leader.connect_connected(move |v| {
+            let (v, app) = (v.clone(), app.clone());
+            glib::timeout_add_local_once(Duration::from_millis(ms), move || {
+                v.shutdown(Duration::from_secs(5));
+                app.quit();
+            });
+        });
+    }
     let app2 = app.clone();
     let c = code.clone();
     leader.connect_disconnected(move |_, r| {

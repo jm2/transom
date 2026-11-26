@@ -13,6 +13,7 @@ use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 
 use transom_view_core::clipboard::{
     CF_DIB, CF_UNICODETEXT, ClipFormat, FileRange, LOCAL_FILES_ID, LOCAL_HTML_ID, LOCAL_PNG_ID,
+    MAX_CLIP_BYTES,
 };
 use transom_view_core::engine::EngineEvent;
 
@@ -36,12 +37,16 @@ const CHANNEL_RC_OK: u32 = 0;
 pub(crate) struct ClipState {
     ctx: AtomicPtr<ffi::CliprdrClientContext>,
     ready: AtomicBool,
-    /// What the local clipboard offers (sent on MonitorReady and on change).
+    /// What the local clipboard offers (sent on MonitorReady and on change; cleared
+    /// when the server's own format list supersedes it).
     local: Mutex<Vec<ClipFormat>>,
     /// Server format ids for the formats it currently offers.
     remote_ids: Mutex<HashMap<ClipFormat, u32>>,
     /// Formats we've requested, in order (responses don't carry the format id).
     pending: Mutex<std::collections::VecDeque<ClipFormat>>,
+    /// Our outstanding FileContents requests: stream id → most bytes the answer may
+    /// hold. Answers for any other stream are dropped.
+    file_pending: Mutex<HashMap<u32, u32>>,
 }
 
 impl ClipState {
@@ -81,6 +86,12 @@ pub(crate) fn detach(state: &State) {
     state
         .clip
         .pending
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clear();
+    state
+        .clip
+        .file_pending
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .clear();
@@ -284,6 +295,14 @@ unsafe extern "C" fn server_format_list(
             .remote_ids
             .lock()
             .unwrap_or_else(|e| e.into_inner()) = ids;
+        // The server's copy supersedes ours (MS-RDPECLIP): it has no business reading
+        // what we offered before, including our own publication of its content.
+        state
+            .clip
+            .local
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
         let resp = ffi::CLIPRDR_FORMAT_LIST_RESPONSE {
             common: ffi::CLIPRDR_HEADER {
                 msgType: CB_FORMAT_LIST_RESPONSE,
@@ -363,9 +382,14 @@ unsafe extern "C" fn server_format_data_response(
         };
         let r = &*resp;
         let ok = r.common.msgFlags as u32 & ffi::CB_RESPONSE_OK != 0;
-        let data = (ok && !r.requestedFormatData.is_null()).then(|| {
-            std::slice::from_raw_parts(r.requestedFormatData, r.common.dataLen as usize).to_vec()
-        });
+        let len = r.common.dataLen as usize;
+        if len > MAX_CLIP_BYTES {
+            tracing::debug!(?format, len, "remote clipboard data too large; dropped");
+        }
+        // Checked before copying: FreeRDP has already reassembled the PDU at whatever
+        // length the server chose; it isn't copied again unless it's within the limit.
+        let data = (ok && !r.requestedFormatData.is_null() && len <= MAX_CLIP_BYTES)
+            .then(|| std::slice::from_raw_parts(r.requestedFormatData, len).to_vec());
         tracing::debug!(
             ?format,
             len = data.as_ref().map(Vec::len),
@@ -389,6 +413,12 @@ pub(crate) fn file_request(state: &State, stream_id: u32, index: u32, range: Fil
         FileRange::Size => (FILECONTENTS_SIZE, 0u64, 8u32),
         FileRange::Bytes { offset, len } => (FILECONTENTS_RANGE, offset, len),
     };
+    state
+        .clip
+        .file_pending
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(stream_id, len);
     let req = ffi::CLIPRDR_FILE_CONTENTS_REQUEST {
         common: ffi::CLIPRDR_HEADER {
             msgType: CB_FILECONTENTS_REQUEST,
@@ -484,8 +514,27 @@ unsafe extern "C" fn server_file_contents_response(
             return CHANNEL_RC_OK;
         };
         let r = &*resp;
+        // Only answers to a request of ours, and no longer than what was asked for,
+        // checked before anything is copied.
+        let Some(max) = state
+            .clip
+            .file_pending
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&r.streamId)
+        else {
+            tracing::debug!(stream = r.streamId, "unsolicited file contents; dropped");
+            return CHANNEL_RC_OK;
+        };
         let ok = r.common.msgFlags as u32 & ffi::CB_RESPONSE_OK != 0;
-        let data = (ok && !r.requestedData.is_null())
+        if r.cbRequested > max {
+            tracing::debug!(
+                len = r.cbRequested,
+                max,
+                "file contents longer than asked for; dropped"
+            );
+        }
+        let data = (ok && !r.requestedData.is_null() && r.cbRequested <= max)
             .then(|| std::slice::from_raw_parts(r.requestedData, r.cbRequested as usize).to_vec());
         state.emit(EngineEvent::ClipboardFileData {
             stream_id: r.streamId,
