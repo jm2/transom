@@ -70,6 +70,11 @@ pub fn forward_session_shortcuts(follower: &gtk::Window, main: &gtk::Window) {
         let main = main.downgrade();
         let cb = gtk::CallbackAction::new(move |_, _| {
             if let Some(main) = main.upgrade() {
+                // Leaving the session means the main window's chrome: raise it, or
+                // the follower stays active and keeps the keyboard.
+                if action == "win.focus-chrome" {
+                    main.present();
+                }
                 let _ = main.activate_action(action, None);
             }
             glib::Propagation::Stop
