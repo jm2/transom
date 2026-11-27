@@ -2,7 +2,7 @@
 //! The `TransomView` widget.
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -93,7 +93,9 @@ mod imp {
         pub layout_timer: Option<glib::SourceId>,
         pub wheel: WheelAccumulator,
         pub hwheel: WheelAccumulator,
-        pub pressed_keys: HashSet<Scancode>,
+        /// Held keys: physical scancode → what was sent for it (they differ when
+        /// `command_as_ctrl` maps ⌘ to Ctrl, so ⌃ and ⌘ can both hold one Ctrl).
+        pub pressed_keys: HashMap<Scancode, Scancode>,
         /// Send the Super/Command keys as Ctrl (for Mac users' ⌘C, ⌘V…).
         pub command_as_ctrl: bool,
         pub pressed_buttons: HashSet<u32>,
@@ -965,20 +967,29 @@ mod imp {
             if !self.connected() {
                 return glib::Propagation::Proceed;
             }
-            if let Some(sc) = keymap::from_hardware_keycode(keycode) {
-                let sc = if self.inner.borrow().command_as_ctrl {
-                    keymap::command_as_ctrl(sc)
-                } else {
-                    sc
-                };
-                {
+            if let Some(phys) = keymap::from_hardware_keycode(keycode) {
+                let sc = {
                     let mut inner = self.inner.borrow_mut();
                     if down {
-                        inner.pressed_keys.insert(sc);
-                    } else if !inner.pressed_keys.remove(&sc) {
-                        return glib::Propagation::Stop;
+                        let sc = if inner.command_as_ctrl {
+                            keymap::command_as_ctrl(phys)
+                        } else {
+                            phys
+                        };
+                        inner.pressed_keys.insert(phys, sc);
+                        sc
+                    } else {
+                        let Some(sc) = inner.pressed_keys.remove(&phys) else {
+                            return glib::Propagation::Stop;
+                        };
+                        // Another physical key still holds the same remote key
+                        // (⌃ and ⌘ both mapped to Ctrl): keep it down.
+                        if inner.pressed_keys.values().any(|&v| v == sc) {
+                            return glib::Propagation::Stop;
+                        }
+                        sc
                     }
-                }
+                };
                 self.send(EngineCommand::Input(InputEvent::Key {
                     scancode: sc.code,
                     extended: sc.extended,
@@ -1029,6 +1040,7 @@ mod imp {
                     inner.pointer,
                 )
             };
+            let keys: HashSet<Scancode> = keys.into_values().collect();
             for sc in keys {
                 self.send(EngineCommand::Input(InputEvent::Key {
                     scancode: sc.code,

@@ -579,6 +579,7 @@ impl Session {
                 .title(self.profile.borrow().display_name())
                 .child(&view)
                 .build();
+            crate::window::forward_session_shortcuts(&w, main);
             w.fullscreen_on_monitor(m);
             w.present();
             followers.push(w);

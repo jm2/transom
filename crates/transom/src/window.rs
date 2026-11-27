@@ -45,6 +45,53 @@ impl std::fmt::Debug for MainWindow {
     }
 }
 
+/// Ctrl+Alt chords that act on the window even while a session has the keyboard.
+const CHORD_MODS: gdk::ModifierType =
+    gdk::ModifierType::CONTROL_MASK.union(gdk::ModifierType::ALT_MASK);
+const SESSION_CHORDS: &[(gdk::Key, &str)] = &[
+    (gdk::Key::Return, "win.fullscreen"),
+    (gdk::Key::KP_Enter, "win.fullscreen"),
+    (gdk::Key::Pause, "win.fullscreen"),
+    (gdk::Key::Break, "win.fullscreen"),
+    (gdk::Key::End, "win.send-cad"),
+    (gdk::Key::KP_End, "win.send-cad"),
+    (gdk::Key::Home, "win.focus-chrome"),
+    (gdk::Key::KP_Home, "win.focus-chrome"),
+];
+
+/// Give a multi-monitor follower window the main window's session shortcuts.
+///
+/// A follower is a plain `gtk::Window` with no actions and no application, so its
+/// keys would otherwise all go to the remote. Run the main window's actions instead.
+pub fn forward_session_shortcuts(follower: &gtk::Window, main: &gtk::Window) {
+    let controller = gtk::ShortcutController::new();
+    controller.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let forward = |trigger: gtk::ShortcutTrigger, action: &'static str| {
+        let main = main.downgrade();
+        let cb = gtk::CallbackAction::new(move |_, _| {
+            if let Some(main) = main.upgrade() {
+                let _ = main.activate_action(action, None);
+            }
+            glib::Propagation::Stop
+        });
+        controller.add_shortcut(gtk::Shortcut::new(Some(trigger), Some(cb)));
+    };
+    for (key, action) in SESSION_CHORDS {
+        forward(gtk::KeyvalTrigger::new(*key, CHORD_MODS).upcast(), action);
+    }
+    // Elsewhere the app shortcuts are off while a session has the keyboard.
+    if crate::app::SHORTCUTS_STAY_LOCAL {
+        for (action, accels) in app_shortcuts() {
+            for accel in *accels {
+                if let Some(t) = gtk::ShortcutTrigger::parse_string(accel) {
+                    forward(t, action);
+                }
+            }
+        }
+    }
+    follower.add_controller(controller);
+}
+
 impl MainWindow {
     pub fn new(app: &adw::Application, state: Rc<AppState>) -> Rc<Self> {
         let window = adw::ApplicationWindow::builder()
@@ -493,19 +540,9 @@ impl MainWindow {
     fn setup_keyboard(self: &Rc<Self>) {
         let controller = gtk::ShortcutController::new();
         controller.set_propagation_phase(gtk::PropagationPhase::Capture);
-        let ctrl_alt = gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::ALT_MASK;
-        for (key, action) in [
-            (gdk::Key::Return, "win.fullscreen"),
-            (gdk::Key::KP_Enter, "win.fullscreen"),
-            (gdk::Key::Pause, "win.fullscreen"),
-            (gdk::Key::Break, "win.fullscreen"),
-            (gdk::Key::End, "win.send-cad"),
-            (gdk::Key::KP_End, "win.send-cad"),
-            (gdk::Key::Home, "win.focus-chrome"),
-            (gdk::Key::KP_Home, "win.focus-chrome"),
-        ] {
+        for (key, action) in SESSION_CHORDS {
             controller.add_shortcut(gtk::Shortcut::new(
-                Some(gtk::KeyvalTrigger::new(key, ctrl_alt)),
+                Some(gtk::KeyvalTrigger::new(*key, CHORD_MODS)),
                 Some(gtk::NamedAction::new(action)),
             ));
         }
