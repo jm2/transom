@@ -56,8 +56,19 @@ impl std::fmt::Debug for Session {
 }
 
 impl Session {
+    /// See `TransomView::set_command_as_ctrl`; covers multi-monitor followers too.
+    pub fn set_command_as_ctrl(&self, on: bool) {
+        self.view.set_command_as_ctrl(on);
+        for w in self.followers.borrow().iter() {
+            if let Some(v) = w.child().and_downcast::<TransomView>() {
+                v.set_command_as_ctrl(on);
+            }
+        }
+    }
+
     pub fn new(state: Rc<AppState>, profile: Profile, temporary: bool) -> Rc<Self> {
         let view = TransomView::new();
+        view.set_command_as_ctrl(state.command_as_ctrl.get());
         view.update_property(&[gtk::accessible::Property::Label(&format!(
             "Remote desktop: {}",
             profile.display_name()
@@ -562,11 +573,13 @@ impl Session {
                 continue;
             }
             let view = TransomView::new_follower(&self.view);
+            view.set_command_as_ctrl(self.state.command_as_ctrl.get());
             view.set_region(region);
             let w = gtk::Window::builder()
                 .title(self.profile.borrow().display_name())
                 .child(&view)
                 .build();
+            crate::window::forward_session_shortcuts(&w, main);
             w.fullscreen_on_monitor(m);
             w.present();
             followers.push(w);

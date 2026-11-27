@@ -35,7 +35,7 @@ GTK app runs on macOS and Windows.
 | Certificate trust: system CAs, then trust on first use; a changed certificate is refused unless you explicitly accept it after a warning | ✅ |
 | Passwords remembered in the system keyring | ✅ Secret Service (Linux), Keychain (macOS), Credential Manager (Windows) |
 | Tabs (detachable), fullscreen, multiple monitors | ✅ |
-| Keyboard with system shortcuts sent to the remote; Ctrl+Alt+End for Ctrl+Alt+Del | ✅ |
+| Keyboard with system shortcuts sent to the remote; Ctrl+Alt+End for Ctrl+Alt+Del (macOS: ⌘ shortcuts stay local, ⌥⌘⌫ sends Ctrl+Alt+Del, ⌘ reaches the remote as Ctrl) | ✅ |
 | Clipboard: text, HTML, images and files, both ways | ✅ |
 | Remote audio and microphone | ✅ Windows Server 2025 doesn't open the microphone ([known issue](docs/known-issues.md)) |
 | RD Gateway (HTTP, RPC over HTTP, WebSocket) | ✅ |
